@@ -1,45 +1,45 @@
-// licosim.cpp : This file contains the 'main' function. Program execution begins and ends there.
+// licosimexe.cpp : This file contains the 'main' function. Program execution begins and ends there.
 //
 
 #include <iostream>
 #include <boost/program_options.hpp>
 #include "licosim.hpp"
 
-namespace po = boost::program_options;
-
 int main(int argc, char* argv[])
 {
-    cxxopts::Options opt{"LicoSim", "Given lidar data and a lot of area parameters, calculate proposed LMU based treatment alternatives based on given reference conditions."};
-    opt.add_options()
-        ("p,projectpoly", "REQUIRED: Path to project area polygon (esri shapefile).", cxxopts::value<std::string>())
-        ("u,unitpoly", "REQUIRED: Path to unit polygons (esri shapefile, or raster).", cxxopts::value<std::string>())
-        ("o,output", "Path to location outputs should be written (licosim folder will be created). Defaults to lidar data directory.", cxxopts::value<std::string>())
-        ("t,thread", "How many threads to process on.", cxxopts::value<int>()->default_value("1"))
-        ("l,lidar", "Path to lidar dataset, in standard uw processing format. Defaults to current directory.", cxxopts::value<std::string>()->default_value("."))
-        ("lmu", "Path to lmu raster (\".img\").  See documentation for expected format.", cxxopts::value<std::string>())
+    namespace po = boost::program_options;
+
+    po::options_description desc("Licosim: Given lidar data and a lot of area parameters, calculate proposed LMU based treatment alternatives based on given reference conditions.");
+    desc.add_options()
+        ("projectpoly,p", po::value<std::string>()->required(), "REQUIRED: Path to project area polygon (esri shapefile).")
+        ("unitpoly,u", po::value<std::string>()->required(), "REQUIRED: Path to unit polygons (esri shapefile, or raster).")
+        ("output,o", po::value<std::string>(), "Path to location outputs should be written (licosim folder will be created). Defaults to lidar data directory.")
+        ("thread,t", po::value<int>()->default_value(1), "How many threads to process on.")
+        ("lidar,l", po::value<std::string>()->default_value("."), "Path to lidar dataset, in standard uw processing format. Defaults to current directory.")
+        ("lmu", po::value<std::string>(), "Path to lmu raster (\".img\").  See documentation for expected format.")
         ("subdivideLmus", "If present, subdivide lmus first by climate class and the by kmeans to a certain size")
-        ("priority", "What method to prioritize units? Options are: column.", cxxopts::value<std::string>()->default_value("column"))
-        ("column", "column number or name in shapefile that is the priority attribute (0 indexed. Will look for \"priority\" if blank", cxxopts::value<std::string>())
-        ("r, reference", "Path to reference database, if not using one of the internal databases.", cxxopts::value<std::string>())
-        ("allom", "Comma separted coefficients to a linear allometric equation (b0,b1,b2...), will derive them from FIA data if missing.", cxxopts::value<std::vector<double>>())
-        ("a,aet", "Path to AET layer, to override default", cxxopts::value<std::string>())
-        ("c,cwd", "Path to CWD layer, to override default", cxxopts::value<std::string>())
-        ("j,janmin", "Path to Janmin layer, to override default", cxxopts::value<std::string>())
+        ("priority", po::value<std::string>()->default_value("column"), "What method to prioritize units? Options are: column.")
+        ("column", po::value<std::string>(), "column number or name in shapefile that is the priority attribute (0 indexed. Will look for \"priority\" if blank")
+        ("reference,r", po::value<std::string>(), "Path to reference database, if not using one of the internal databases.")
+        ("allom", po::value<std::vector<double>>(), "Comma separted coefficients to a linear allometric equation (b0,b1,b2...), will derive them from FIA data if missing.")
+        ("aet,a", po::value<std::string>(), "Path to AET layer, to override default")
+        ("cwd,c", po::value<std::string>(), "Path to CWD layer, to override default")
+        ("janmin,j", po::value<std::string>(), "Path to Janmin layer, to override default")
         //("usefire", "Use built in fire reference database??", cxxopts::value<bool>()->default_value("true"))
         //("usehydro", "Use built in hydro reference database??", cxxopts::value<bool>()->default_value("false"))
         //("usehabitat", "Use built in habitat reference database?", cxxopts::value<bool>()->default_value("false"))
         //("dofire", "Run fire modeling after treatment?", cxxopts::value<bool>()->default_value("false"))
-        ("terrain", "What terrain type to generate LMUs based on? (steep or moderate)", cxxopts::value<std::string>()->default_value("moderate"))
+        ("terrain", po::value<std::string>()->default_value("moderate"), "What terrain type to generate LMUs based on? (steep or moderate)")
         //("pland", "What proportion of the landscape should be treated? (0-1) Overrides tland.", cxxopts::value<double>())
         //("tland", "What is the total landscape area that should be treated (ha if units are meters, ac if units are feet)", cxxopts::value<double>())
-        ("dbhmin", "All trees smaller than this size will be cut in cm. Default 15.24cm (6in)", cxxopts::value<double>())
-        ("dbhmax", "All trees larger than this will be retained in cm. Default 53.34cm (21in)", cxxopts::value<double>())
+        ("dbhmin", po::value<double>(), "All trees smaller than this size will be cut in cm. Default 15.24cm (6in)")
+        ("dbhmax", po::value<double>(), "All trees larger than this will be retained in cm. Default 53.34cm (21in)")
         //("cover", "Three comma separated values between 0-1, representing proportion of cover left in each cover class: 0-40 (open), 40-60 (moderate), 60-100 (dense).", cxxopts::value<std::vector<double>>())
-        ("s,seed", "Positive int value to seed the randomness.", cxxopts::value<int>())
+        ("seed,s", po::value<int>(), "Positive int value to seed the randomness.")
         ("writeunits", "Write out lmus and rxunits to the output folder (treelists). WARNING can take up A LOT of space.")
         ("fastfuels", "write csvs in fastfuels format too if writeunits is set.")
         ("overridetargets", "Use Ba and DBH cutoffs defined in unit file to override internal targets")
-        ("h,help", "Display this help message and exit.");
+        ("help,h", "Display this help message and exit.");
 
     std::string commandLine = "";
     for (int i = 0; i < argc; ++i) {
@@ -47,35 +47,38 @@ int main(int argc, char* argv[])
     }
 
     if (argc == 1) {
-        std::cout << opt.help() << '\n';
-        exit(EXIT_SUCCESS);
+        std::cout << desc << '\n';
+        return 0;
     }
 
-    auto options = opt.parse(argc, argv);
+    po::variables_map vm;
+    try {
+        po::store(po::parse_command_line(argc, argv, desc), vm);
+        po::notify(vm);
+    }
+    catch (const po::error& e) {
+        std::cerr << "Error: " << e.what() << "\n";
+        std::cerr << desc << "\n";
+        return 1;
+    }
 
-    if (options.count("help")) {
-        std::cout << opt.help() << '\n';
-        exit(EXIT_SUCCESS);
+    if (vm.count("help")) {
+        std::cout << desc << '\n';
+        return 0;
     }
 
     std::cout << "\n";
     std::cout << "---------------------------------------------------------\n";
-    std::cout << "-------------- Licosim v0.5.1   03/01/2021 --------------\n";
+    std::cout << "-------------- Licosim v0.8.1   12/12/2025 --------------\n";
     std::cout << "---------------------------------------------------------\n";
     std::cout << "\n";
-
-    //auto searchpath = "";
-    //proj_context_set_search_paths(nullptr, 1, &searchpath);
-
-    auto x = proj_context_get_database_path(nullptr);
-    std::cout << x << "\n";
 
     std::cout << "Beginning processing:\n";
     std::cout << "\tReading projectsettings...";
-    auto ps = licosim::ProjectSettings(licosim::getExeLocation(argc, argv).string(), options);
+    auto ps = rxtools::ProjectSettings(rxtools::getExeLocation(argc, argv).string(), options);
     ps.commandLine = commandLine;
     std::cout << " Done!\n";
-    
+
     std::cout << "\tConstructing primary data objects\n";
     auto ls = licosim::Licosim(ps);
     std::cout << "\tPrimary data objects done!\n";

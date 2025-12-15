@@ -1,9 +1,9 @@
-#include "licosim/licosim.hpp"
+#include "licosim.hpp"
 #include <chrono>
 
 namespace licosim {
 
-    Licosim::Licosim(ProjectSettings& ps) : projectSettings(ps) {
+    Licosim::Licosim() {
         if (ps.seed > -1) {
             srand(ps.seed);
             dre = std::default_random_engine(ps.seed);
@@ -13,19 +13,13 @@ namespace licosim {
         }
 
         std::cout << "\tConstructing project area:\n";
-        projectArea = ProjectArea(ps.lidarDatasetPath, ps.projectPolygonPath, ps.aetPath, ps.cwdPath, ps.tmnPath, ps.nThread, ps.lmuRasterPath, ps.terrain);
-        treater = Treatment(dre);
+        projectArea = rxtools::ProjectArea(ps.lidarDatasetPath, ps.projectPolygonPath, ps.aetPath, ps.cwdPath, ps.tmnPath, ps.nThread, ps.lmuRasterPath, ps.terrain);
+        treater = rxtools::Treatment(dre);
         std::cout << "\tProject Area done!\n";
-
-        projectArea.lmuIds.writeRaster("G:/inyo_licosim/preids.tif");
-        projectArea.lmuRaster.writeRaster("G:/inyo_licosim/preraster.tif");
 
         if (ps.subdivideLmus) {
             projectArea.subdivideLmus(ps.climateClassPath, ps.nThread);
         }
-
-        projectArea.lmuIds.writeRaster("G:/inyo_licosim/postids.tif");
-        projectArea.lmuRaster.writeRaster("G:/inyo_licosim/postraster.tif");
 
         output.lmus = projectArea.lmuRaster;
         output.lmuIds = projectArea.lmuIds;
@@ -64,7 +58,7 @@ namespace licosim {
         }
 
         if (projectSettings.writeUnits && projectSettings.fastFuels) {
-            ffa = fastFuelsAllometry(ps.fiaPath);
+            ffa = rxtools::allometry::FastFuels(); wrong input to this function;
         }
 
         std::cout << "\tReading and reprojecting unit layer...";
@@ -72,23 +66,23 @@ namespace licosim {
             shp = false;
 
         if (shp) {
-            unitPoly = spatial::SpVectorDataset<spatial::SpMultiPolygon>(projectSettings.unitPolygonPath);
-            if (!spatial::consistentProjection(unitPoly.projection(), projectArea.projectPoly.projection()))
+            unitPoly = lapis::VectorDataset<lapis::MultiPolygon>(projectSettings.unitPolygonPath);
+            if (!lapis::consistentProjection(unitPoly.crs(), projectArea.projectPoly.crs()))
                 unitPoly.project(projectArea.projectPoly.projection());
             if (!unitPoly.overlaps(projectArea.projectPoly)) {
                 std::cerr << "Unit polygon does not overlap project polygon\n";
-                throw spatial::OutsideExtentException();
+                throw lapis::OutsideExtentException();
             }
 
         }
         else {
-            unitRaster = spatial::Raster<int>(projectSettings.unitPolygonPath);
-            spatial::Alignment projectAlign = spatial::Alignment((spatial::Extent)projectSettings.unitPolygonPath, unitRaster.nrow(), unitRaster.ncol());
-            unitRaster = spatial::resampleNGB(unitRaster, projectAlign);
+            unitRaster = lapis::Raster<int>(projectSettings.unitPolygonPath);
+            lapis::Alignment projectAlign = lapis::Alignment((lapis::Extent)projectSettings.unitPolygonPath, unitRaster.nrow(), unitRaster.ncol());
+            unitRaster = lapis::resampleNGB(unitRaster, projectAlign);
             unitRaster.trim();
             if (!unitRaster.overlaps(projectArea.projectPoly)) {
                 std::cerr << "Unit raster does not overlap project polygon\n";
-                throw spatial::OutsideExtentException();
+                throw lapis::OutsideExtentException();
             }
         }
         std::cout << " Done!\n";
@@ -106,15 +100,15 @@ namespace licosim {
         }
         std::istream is{ &fb };
 
-        readCSVLine(is); //skip colnames.
+        rxtools::utilities::readCSVLine(is); //skip colnames.
         while (!is.eof()) {
-            auto row = readCSVLine(is);
+            auto row = rxtools::utilities::readCSVLine(is);
             if (row.size() <= 1)
                 continue;
             names.push_back(row[0]);
             ids.push_back(std::stoi(row[1]));
-            types.push_back(static_cast<LmuType>(std::stoi(row[2])));
-            refStructures.push_back(StructureSummary(std::stod(row[3]), std::stod(row[4]), std::stod(row[5]), std::stod(row[6]), std::stod(row[7]),
+            types.push_back(static_cast<rxtools::LmuType>(std::stoi(row[2])));
+            refStructures.push_back(rxtools::StructureSummary(std::stod(row[3]), std::stod(row[4]), std::stod(row[5]), std::stod(row[6]), std::stod(row[7]),
                 std::vector<double>{std::stod(row[8]), std::stod(row[9]), std::stod(row[10]), std::stod(row[11]), std::stod(row[12]), std::stod(row[13])}));
             aet.push_back(std::stod(row[14]));
             cwd.push_back(std::stod(row[15]));
@@ -129,7 +123,7 @@ namespace licosim {
             data(i, 1) = cwd.at(i);
             data(i, 2) = tmn.at(i);
         }
-        pca = Pca(data);
+        pca = rxtools::utilities::Pca(data);
 
         //Calculate distance weighted by axis importance.
         for (int i = 0; i < pca.data.rows(); i++) {
@@ -147,55 +141,55 @@ namespace licosim {
         maxDist = std::sqrt(maxDist);
         maxDist /= 5;
 
-        allLmu = PCA_KDTree<3>(pca);
+        allLmu = rxtools::utilities::PCA_KDTree<3>(pca);
 
         std::vector<bool> use(pca.data.rows(), true);
         for (int i = 0; i < types.size(); ++i)
-            if (types[i] != LmuType::ridgeTop)
+            if (types[i] != rxtools::LmuType::ridgeTop)
                 use[i] = false;
-        ridgeLmu = PCA_KDTree<3>(pca, use);
+        ridgeLmu = rxtools::utilities::PCA_KDTree<3>(pca, use);
 
         for (int i = 0; i < types.size(); ++i) {
-            if (types[i] == LmuType::valleyBottom)
+            if (types[i] == rxtools::LmuType::valleyBottom)
                 use[i] = true;
             else
                 use[i] = false;
         }
-        valleyLmu = PCA_KDTree<3>(pca, use);
+        valleyLmu = rxtools::utilities::PCA_KDTree<3>(pca, use);
 
         for (int i = 0; i < types.size(); ++i) {
-            if (types[i] == LmuType::swFacing)
+            if (types[i] == rxtools::LmuType::swFacing)
                 use[i] = true;
             else
                 use[i] = false;
         }
-        swFacingLmu = PCA_KDTree<3>(pca, use);
+        swFacingLmu = rxtools::utilities::PCA_KDTree<3>(pca, use);
 
         for (int i = 0; i < types.size(); ++i) {
-            if (types[i] == LmuType::neFacing)
+            if (types[i] == rxtools::LmuType::neFacing)
                 use[i] = true;
             else
                 use[i] = false;
         }
-        neFacingLmu = PCA_KDTree<3>(pca, use);
+        neFacingLmu = rxtools::utilities::PCA_KDTree<3>(pca, use);
 
         std::cout << "\tPCA done and reference area distance threshold done!\n";
     }
 
-    std::vector<int> Licosim::getKnn(Lmu& lmu, const LmuType& type, const double& maxDist, const int k) {
+    std::vector<int> Licosim::getKnn(rxtools::Lmu& lmu, const rxtools::LmuType& type, const double& maxDist, const int k) {
         auto rTmpClim = projectArea.aet;
         rTmpClim.crop(lmu.mask);
         rTmpClim.extend(lmu.mask);
         rTmpClim.mask(lmu.mask);
         auto thisaet = xt::mean(xt::filter(rTmpClim.values().value(), rTmpClim.values().has_value()))();
 
-        rTmpClim = spatial::Raster(projectArea.cwd);
+        rTmpClim = lapis::Raster(projectArea.cwd);
         rTmpClim.crop(lmu.mask);
         rTmpClim.extend(lmu.mask);
         rTmpClim.mask(lmu.mask);
         auto thiscwd = xt::mean(xt::filter(rTmpClim.values().value(), rTmpClim.values().has_value()))();
 
-        rTmpClim = spatial::Raster(projectArea.tmn);
+        rTmpClim = lapis::Raster(projectArea.tmn);
         rTmpClim.crop(lmu.mask);
         rTmpClim.extend(lmu.mask);
         rTmpClim.mask(lmu.mask);
@@ -204,30 +198,30 @@ namespace licosim {
         Eigen::RowVector3d pcClimate; 
         pcClimate << thisaet, thiscwd, thistmn;
 
-        if (type == LmuType::all)
+        if (type == rxtools::LmuType::all)
             return allLmu.detailedQuery(pcClimate, k, false, maxDist);
-        else if (type == LmuType::ridgeTop)
+        else if (type == rxtools::LmuType::ridgeTop)
             return ridgeLmu.detailedQuery(pcClimate, k, false, maxDist);
-        else if (type == LmuType::valleyBottom)
+        else if (type == rxtools::LmuType::valleyBottom)
             return valleyLmu.detailedQuery(pcClimate, k, false, maxDist);
-        else if (type == LmuType::swFacing)
+        else if (type == rxtools::LmuType::swFacing)
             return swFacingLmu.detailedQuery(pcClimate, k, false, maxDist);
         else
             return neFacingLmu.detailedQuery(pcClimate, k, false, maxDist);
     }
 
-    void Licosim::assignTargetThread(int& sofar, int& nLmu, Lmu& lmu, const int thisThread) {
+    void Licosim::assignTargetThread(int& sofar, int& nLmu, rxtools::Lmu& lmu, const int thisThread) {
         std::cout << "\t Assigning targets to Lmu " + std::to_string(sofar) + "/" + std::to_string(nLmu) + " on thread " + std::to_string(thisThread) + "\n";
         auto k = getKnn(lmu, lmu.type, maxDist, 20);
         if (k.size() == 0) {
-            k = getKnn(lmu, LmuType::all, maxDist, 20);
+            k = getKnn(lmu, rxtools::LmuType::all, maxDist, 20);
         }
         if (k.size() == 0) {
-            k = getKnn(lmu, LmuType::all, 0, 20); //defaults to max dist = max double, 10 samples.
+            k = getKnn(lmu, rxtools::LmuType::all, 0, 20); //defaults to max dist = max double, 10 samples.
         }
 
-        auto thisOsiNum = spatial::crop(projectArea.bbOsiNum, lmu.mask);
-        auto thisOsiDen = spatial::crop(projectArea.bbOsiDen, lmu.mask);
+        auto thisOsiNum = lapis::crop(projectArea.bbOsiNum, lmu.mask);
+        auto thisOsiDen = lapis::crop(projectArea.bbOsiDen, lmu.mask);
         for (int i : k) {
             lmu.targetLmuNames.push_back(names[i] + "_" + std::to_string(ids[i]));
             lmu.structures.push_back(refStructures[i]);
@@ -236,18 +230,18 @@ namespace licosim {
     }
 
     void Licosim::doTreatmentThreaded(int nThread, double dbhMin, double dbhMax) {
-        boost::filesystem::path p(projectSettings.outputPath);
+        std::filesystem::path p(projectSettings.outputPath);
         if (projectSettings.writeUnits) {
             p /= "lmus";
-            if (!boost::filesystem::exists(p)) {
-                boost::filesystem::create_directories(p);
+            if (!std::filesystem::exists(p)) {
+                std::filesystem::create_directories(p);
             }
         }
 
-        spatial::Raster<int> unitZonal{ (spatial::Alignment)projectArea.lmuIds };
-        paired = spatial::Raster<int>{ (spatial::Alignment)projectArea.lmuIds };
+        lapis::Raster<int> unitZonal{ (lapis::Alignment)projectArea.lmuIds };
+        paired = lapis::Raster<int>{ (lapis::Alignment)projectArea.lmuIds };
 
-        lico::TaoList treatedTaos{};
+        rxtools::TaoListMP treatedTaos{};
         std::mutex mut{};
         int sofar = 0;
         std::vector<std::thread> threads{};
@@ -261,9 +255,9 @@ namespace licosim {
 
         std::cout << "Calculating post treatment OSI\n";
         //Post osi
-        auto postNum = spatial::Raster<int>{ (spatial::Alignment)projectArea.lmuIds };
-        auto postDen = spatial::Raster<int>{ (spatial::Alignment)projectArea.lmuIds };
-        std::pair<spatial::coord_t, spatial::coord_t> expectedRes{};
+        auto postNum = lapis::Raster<int>{ (lapis::Alignment)projectArea.lmuIds };
+        auto postDen = lapis::Raster<int>{ (lapis::Alignment)projectArea.lmuIds };
+        std::pair<lapis::coord_t, lapis::coord_t> expectedRes{};
         if (projectArea.lidarDataset->getConvFactor() == 1) {
             expectedRes.first = 0.75;
         }
@@ -286,7 +280,7 @@ namespace licosim {
         auto numZones = lsmetrics::zonalStatisticsByRaster(postNum, unitZonal, zSum);
         auto denZones = lsmetrics::zonalStatisticsByRaster(postDen, unitZonal, zSum);
 
-        spatial::Raster<double> postOsi{ (spatial::Alignment)unitZonal };
+        lapis::Raster<double> postOsi{ (spatial::Alignment)unitZonal };
         for (auto z : numZones) {
             bool hv = z.second.has_value();
             if (hv) {
@@ -313,9 +307,9 @@ namespace licosim {
         std::cout << "Treatment done\n";
     }
 
-    void Licosim::treatmentThread(int& sofar, std::mutex& mut, double dbhMin, double dbhMax, spatial::Raster<int>& unitZonal, lico::TaoList& treatedTaos, const int thisThread) {
+    void Licosim::treatmentThread(int& sofar, std::mutex& mut, double dbhMin, double dbhMax, lapis::Raster<int>& unitZonal, lico::TaoList& treatedTaos, const int thisThread) {
         int nLmu = projectArea.regionType.size();
-        boost::filesystem::path p(projectSettings.outputPath);
+        std::filesystem::path p(projectSettings.outputPath);
         p /= "lmus";
 
         int failedToAdd = 0;
@@ -337,15 +331,15 @@ namespace licosim {
                 auto before = std::chrono::high_resolution_clock::now();
                 //if (i != 6461) continue;
                 auto lmu = projectArea.createLmuThread(i, thisThread);
-                auto e = spatial::Extent(projectArea.aet.xmin() + projectArea.aet.xres() / 2,
+                auto e = lapis::Extent(projectArea.aet.xmin() + projectArea.aet.xres() / 2,
                     projectArea.aet.xmax() - projectArea.aet.xres() / 2,
                     projectArea.aet.ymin() + projectArea.aet.yres() / 2,
                     projectArea.aet.ymax() - projectArea.aet.yres() / 2);
                 if (!lmu.mask.overlaps(e)) continue;
 
-                lico::TaoList taos{};
-                for (lico::index_t j = 0; j < projectArea.allTaos.size(); ++j) {
-                    if (lmu.mask.extract(projectArea.allTaos.x()[j], projectArea.allTaos.y()[j]).has_value())
+                rxtools::TaoListMP taos{};
+                for (size_t j = 0; j < projectArea.allTaos.size(); ++j) {
+                    if (lmu.mask.extract(projectArea.allTaos.x(j), projectArea.allTaos.y(j)).has_value())
                         taos.addTAO(projectArea.allTaos[j]);
                 }
 
@@ -355,8 +349,8 @@ namespace licosim {
 
                 std::cout << "\tCreating Units for Lmu " + std::to_string(i) + "/" + std::to_string(nLmu) + " on thread " + std::to_string(thisThread) + "\n";
                 before = std::chrono::high_resolution_clock::now();
-                auto thisOsiNum = spatial::crop(projectArea.osiNum, lmu.mask);
-                auto thisOsiDen = spatial::crop(projectArea.osiDen, lmu.mask);
+                auto thisOsiNum = lapis::crop(projectArea.osiNum, lmu.mask);
+                auto thisOsiDen = lapis::crop(projectArea.osiDen, lmu.mask);
 
                 if (shp)
                     lmu.makeUnits(unitPoly, taos, thisOsiNum, thisOsiDen, projectArea.lidarDataset->getConvFactor(), dbhFunc, projectSettings.overrideTargets);
@@ -392,13 +386,13 @@ namespace licosim {
                     if (lmu.units[j].currentStructure.ba > lmu.units[j].targetStructure.ba) {
                         int a = lmu.units[j].taos.size();
                         try {
-                            auto trt = treater.doTreatmentGraph(lmu.units[j], lmu.units[j].dbhMin, lmu.units[j].dbhMax, 3);
+                            auto trt = treater.doTreatment(lmu.units[j], lmu.units[j].dbhMin, lmu.units[j].dbhMax, 3);
                             lmu.units[j].treatedTaos = std::get<0>(trt);
                         }
                         catch (std::exception e) {
                             std::cout << e.what();
                             std::cout << " duplicates in treat " + std::to_string(i) + "  " + std::to_string(j) + "\n";
-                            boost::filesystem::create_directory(p / std::to_string(i));
+                            std::filesystem::create_directory(p / std::to_string(i));
                             lmu.write((p / std::to_string(i)).string(), ffa);
                             //throw std::runtime_error("you've been dooped");
                         }
@@ -409,7 +403,7 @@ namespace licosim {
 
                         if (lmu.units[j].targetStructure.ba - lmu.units[j].treatedStructure.ba > 1) {
                             std::cout << "Post treat <<< target ba " + std::to_string(i) + "  " + std::to_string(j) + " " + std::to_string(a) + " " + std::to_string(b) + " " + std::to_string(c) + "\n";
-                            boost::filesystem::create_directory(p / std::to_string(i));
+                            std::filesystem::create_directory(p / std::to_string(i));
                             lmu.write((p / std::to_string(i)).string(), ffa);
                             std::cout << (p / std::to_string(i)).string() << "\n";
                             mut.unlock();
@@ -423,7 +417,7 @@ namespace licosim {
                     lmu.units[j].treated = true;
                     lmu.units[j].unitMask.values().value().fill(i * 10000 + j);
 
-                    std::vector<spatial::Raster<int>*> v = { &lmu.units[j].unitMask, &unitZonal };
+                    std::vector<lapis::Raster<int>*> v = { &lmu.units[j].unitMask, &unitZonal };
 
                     mut.lock();
                     std::cout << "Thread " + std::to_string(thisThread) + " adding rxunit. i = " + std::to_string(i) + "\n";
@@ -436,14 +430,14 @@ namespace licosim {
                         mut.unlock();
                         continue;
                     }*/
-                    for (lico::index_t k = 0; k < lmu.units[j].treatedTaos.size(); ++k)
+                    for (size_t k = 0; k < lmu.units[j].treatedTaos.size(); ++k)
                         treatedTaos.addTAO(lmu.units[j].treatedTaos[k]);
-                    unitZonal = spatial::rasterMergeInterior(v);
+                    unitZonal = lapis::rasterMergeInterior(v);
 
                     auto tmp = lmu.units[j].unitMask;
                     tmp.values().value().fill(lmu.units[j].paired);
                     v = { &tmp, &paired };
-                    paired = spatial::rasterMergeInterior(v);
+                    paired = lapis::rasterMergeInterior(v);
 
                     mut.unlock();
                 }
@@ -452,7 +446,7 @@ namespace licosim {
                 std::cout << "Thread " + std::to_string(thisThread) + " completed in " + std::to_string(duration.count()) + " seconds.\n";
 
                 if (projectSettings.writeUnits) {
-                    boost::filesystem::create_directory(p / std::to_string(i));
+                    std::filesystem::create_directory(p / std::to_string(i));
                     lmu.write((p / std::to_string(i)).string(), ffa);
                 }
             }
