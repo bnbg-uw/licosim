@@ -22,7 +22,6 @@ namespace licosim {
         bool shp = true;
         lapis::VectorDataset<lapis::MultiPolygon> unitPoly;
         lapis::Raster<int> unitRaster;
-        dbhFunction dbhFunc;
 
         std::vector<std::string> names;
         std::vector<int> ids;
@@ -40,7 +39,7 @@ namespace licosim {
         rxtools::utilities::PCA_KDTree<3> swFacingLmu;
         rxtools::utilities::PCA_KDTree<3> neFacingLmu;
 
-        lapis::Raster<int> paired;
+        lapis::Raster<lapis::cell_t> paired;
 
         Licosim();
         std::vector<int> getKnn(rxtools::Lmu& lmu, const rxtools::LmuType& type, const double& maxDist, const int k);
@@ -49,9 +48,8 @@ namespace licosim {
         //void writeOutputs(std::string path);
 
     private:
-        Licosim();
-        void treatmentThread(int& sofar, std::mutex& mut, double dbhMin, double dbhMax, lapis::Raster<int>& unitZonal, lapis::TaoListMP& treatedTaos, const int thisThread);
-        void assignTargetThread(int& sofar, int& nLmu, rxtools::Lmu& lmu, const int thisThread);
+        void treatmentThread(size_t& sofar, std::mutex& mut, double dbhMin, double dbhMax, lapis::Raster<lapis::cell_t>& unitZonal, rxtools::TaoListMP& treatedTaos, const int thisThread);
+        void assignTargetThread(size_t& sofar, size_t& nLmu, rxtools::Lmu& lmu, const int thisThread);
         //void createRxUnitsPolyThread(int& sofar, std::mutex& mut, const int thisThread, spatial::SpVectorDataset<spatial::SpMultiPolygon>& unitPoly, dbhFunction& dbhFunc, std::string& column);
         //void createRxUnitsRasterThread(int& sofar, std::mutex& mut, const int thisThread, spatial::Raster<int>& unitR, dbhFunction& dbhFunc);
 

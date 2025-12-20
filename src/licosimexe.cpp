@@ -2,8 +2,9 @@
 //
 
 #include <iostream>
-#include <boost/program_options.hpp>
+#include "boost/program_options.hpp"
 #include "licosim.hpp"
+#include "ProjWrappers.hpp"
 
 int main(int argc, char* argv[])
 {
@@ -21,7 +22,12 @@ int main(int argc, char* argv[])
         ("priority", po::value<std::string>()->default_value("column"), "What method to prioritize units? Options are: column.")
         ("column", po::value<std::string>(), "column number or name in shapefile that is the priority attribute (0 indexed. Will look for \"priority\" if blank")
         ("reference,r", po::value<std::string>(), "Path to reference database, if not using one of the internal databases.")
-        ("allom", po::value<std::vector<double>>(), "Comma separted coefficients to a linear allometric equation (b0,b1,b2...), will derive them from FIA data if missing.")
+        ("allom_slope", po::value<double>(), "Slope for a univariate linear model. Derived from FIA data if any parameter missing.")
+        ("allom_intercept", po::value<double>(), "Intercept for a univariate linear model. Derived from FIA data if any parameter missing.")
+        ("allom_rsq", po::value<double>(), "R-squared for a univariate linear model. Derived from FIA data if any parameter missing.")
+        ("allom_transform", po::value<std::string>(), "One of (none, square, cube, power). Derived from FIA data if any parameter missing.")
+        ("allom_inunits", po::value<double>(), "Input units (feet, meters). Derived from FIA data if any parameter missing.")
+        ("allom_outunits", po::value<double>(), "Output units (inches, centimeters, meters). Derived from FIA data if any parameter missing.")
         ("aet,a", po::value<std::string>(), "Path to AET layer, to override default")
         ("cwd,c", po::value<std::string>(), "Path to CWD layer, to override default")
         ("janmin,j", po::value<std::string>(), "Path to Janmin layer, to override default")
@@ -75,20 +81,20 @@ int main(int argc, char* argv[])
 
     std::cout << "Beginning processing:\n";
     std::cout << "\tReading projectsettings...";
-    auto ps = rxtools::ProjectSettings(rxtools::getExeLocation(argc, argv).string(), options);
-    ps.commandLine = commandLine;
+    licosim::ProjectSettings::get().loadFromOptionsAndParentPath(lapis::executableFilePath(), vm);
+    licosim::ProjectSettings::get().commandLine = commandLine;
     std::cout << " Done!\n";
 
     std::cout << "\tConstructing primary data objects\n";
-    auto ls = licosim::Licosim(ps);
+    auto ls = licosim::Licosim();
     std::cout << "\tPrimary data objects done!\n";
 
-    std::cout << "Beginning treatments on " + std::to_string(ps.nThread) + " threads:\n ";
-    ls.doTreatmentThreaded(ps.nThread, ps.dbhMin, ps.dbhMax);
+    std::cout << "Beginning treatments on " + std::to_string(licosim::ProjectSettings::get().nThread) + " threads:\n ";
+    ls.doTreatmentThreaded(licosim::ProjectSettings::get().nThread, licosim::ProjectSettings::get().dbhMin, licosim::ProjectSettings::get().dbhMax);
     std::cout << "Treatment done.\n";
 
     std::cout << "Writing outputs...";
-    ls.output.write(ps.outputPath);
+    ls.output.write(licosim::ProjectSettings::get().outputPath);
     std::cout << " Done!\n";
     std::cout << "Processing stopped!\n";
 

@@ -4,99 +4,107 @@
 namespace licosim {
 
     Licosim::Licosim() {
-        if (ps.seed > -1) {
-            srand(ps.seed);
-            dre = std::default_random_engine(ps.seed);
+        ProjectSettings* ps = &ProjectSettings::get();
+        if (ps->seed > -1) {
+            srand(ps->seed);
+            dre = std::default_random_engine(ps->seed);
         }
         else {
-            dre = std::default_random_engine(std::chrono::system_clock::now().time_since_epoch().count());
+            dre = std::default_random_engine(static_cast<unsigned int>(std::chrono::system_clock::now().time_since_epoch().count()));
         }
 
         std::cout << "\tConstructing project area:\n";
-        projectArea = rxtools::ProjectArea(ps.lidarDatasetPath, ps.projectPolygonPath, ps.aetPath, ps.cwdPath, ps.tmnPath, ps.nThread, ps.lmuRasterPath, ps.terrain);
+        projectArea = rxtools::ProjectArea(ps->lidarDatasetPath, ps->projectPolygonPath, ps->aetPath, ps->cwdPath, ps->tmnPath, ps->nThread, ps->lmuRasterPath, ps->terrain);
         treater = rxtools::Treatment(dre);
         std::cout << "\tProject Area done!\n";
 
-        if (ps.subdivideLmus) {
-            projectArea.subdivideLmus(ps.climateClassPath, ps.nThread);
+        if (ps->subdivideLmus) {
+            projectArea.subdivideLmus(ps->climateClassPath, ps->nThread);
         }
 
+        output = rxtools::Output(projectArea.lmuRaster);
         output.lmus = projectArea.lmuRaster;
         output.lmuIds = projectArea.lmuIds;
-        output.commandLine = projectSettings.commandLine;
+        output.commandLine = ps->commandLine;
 
         std::cout << "\tCreating allometry from ";
-        if(ps.allom_coefficients.size()) {
+        if(ps->slope > 0) {
             std::cout << "user provided coefficients...";
-            allometry = Allometry(ps.allom_coefficients);
-            if(ps.allomPower)
-                dbhFunc = [this](lico::adapt_type<spatial::unit_t> ht) {return allometry.getDbhFromHeightAuto(ht); };
-            else
-                dbhFunc = [this](lico::adapt_type<spatial::unit_t> ht) {return allometry.getDbhFromHeightLinear(ht); };
-
+            dbhModel = rxtools::allometry::UnivariateLinearModel(ps->slope, ps->intercept, ps->transform, ps->rsq, ps->inUnit, ps->outUnit);
             std::cout << "  Done!\n";
         }
         else {
             std::cout << "FIA plots...";
-            allometry = Allometry(ps.fiaPath);
-            auto backup = allometry;
-            if(!allometry.model.limitByExtent(projectArea.projectPoly)) {
+            auto reader = rxtools::allometry::FIAReader(ps->fiaPath);
+            auto backup = reader.plots;
+            if(!reader.limitByExtent(projectArea.projectPoly.extent())) {
+                reader.plots = backup;
                 std::cout << "No fia plots in study area, falling back to 5km buffer around study area...";
-                auto conv = projectArea.lidarDataset->getConvFactor();
-                spatial::Extent e(projectArea.projectPoly.xmin() - 5000 * conv, projectArea.projectPoly.xmax() + 5000 * conv,
-                                  projectArea.projectPoly.ymin() - 5000 * conv, projectArea.projectPoly.ymax() + 5000 * conv,
-                                  projectArea.projectPoly.projection());
-                if (!backup.model.limitByExtent(e))
+                auto dist = projectArea.lidarDataset->units().value().convertOneToThis(5000, lapis::linearUnitPresets::meter);
+                lapis::Extent e(projectArea.projectPoly.extent().xmin() - dist, projectArea.projectPoly.extent().xmax() + dist,
+                                  projectArea.projectPoly.extent().ymin() - dist, projectArea.projectPoly.extent().ymax() + dist,
+                                  projectArea.projectPoly.crs());
+                if (!reader.limitByExtent(e))
                     throw std::runtime_error("no fia in this place");
-                allometry = backup;
             }
-            allometry.model.initializeModel();
-
-            dbhFunc = [this](lico::adapt_type<spatial::unit_t> ht) { return allometry.getDbhFromHeightAuto(ht); };
+            reader.makePlotTreeMap(std::vector<std::string>{ "DIA" });
+            auto allTrees = reader.collapsePlotTreeMap();
+            dbhModel = rxtools::allometry::UnivariateLinearModel(allTrees, "DIA", rxtools::linearUnitPresets::inch);
             std::cout << " Done!\n";
-            std::cout << allometry.model.intercept << " " << allometry.model.slope << " " << int(allometry.model.transform) << "\n";
-        }
+            std::cout << dbhModel.parameters.intercept << " " << dbhModel.parameters.slope << " " << int(dbhModel.parameters.transform) << "\n";
 
-        if (projectSettings.writeUnits && projectSettings.fastFuels) {
-            ffa = rxtools::allometry::FastFuels(); wrong input to this function;
+            if (ps->writeUnits && ps->fastFuels) {
+                ffa = rxtools::allometry::FastFuels(allTrees);
+            }
         }
 
         std::cout << "\tReading and reprojecting unit layer...";
-        if (std::filesystem::path(projectSettings.unitPolygonPath).extension() != ".shp")
+        if (std::filesystem::path(ps->unitPolygonPath).extension() != ".shp")
             shp = false;
 
         if (shp) {
-            unitPoly = lapis::VectorDataset<lapis::MultiPolygon>(projectSettings.unitPolygonPath);
-            if (!lapis::consistentProjection(unitPoly.crs(), projectArea.projectPoly.crs()))
-                unitPoly.project(projectArea.projectPoly.projection());
-            if (!unitPoly.overlaps(projectArea.projectPoly)) {
+            unitPoly = lapis::VectorDataset<lapis::MultiPolygon>(ps->unitPolygonPath);
+            if (!unitPoly.crs().isConsistent(projectArea.projectPoly.crs()))
+                unitPoly.projectInPlacePreciseExtent(projectArea.projectPoly.crs());
+            if (!unitPoly.extent().overlaps(projectArea.projectPoly.extent())) {
                 std::cerr << "Unit polygon does not overlap project polygon\n";
                 throw lapis::OutsideExtentException();
             }
 
         }
         else {
-            unitRaster = lapis::Raster<int>(projectSettings.unitPolygonPath);
-            lapis::Alignment projectAlign = lapis::Alignment((lapis::Extent)projectSettings.unitPolygonPath, unitRaster.nrow(), unitRaster.ncol());
-            unitRaster = lapis::resampleNGB(unitRaster, projectAlign);
-            unitRaster.trim();
-            if (!unitRaster.overlaps(projectArea.projectPoly)) {
+            unitRaster = lapis::Raster<int>(ps->unitPolygonPath);
+            lapis::Alignment projectAlign = lapis::Alignment((lapis::Extent)ps->unitPolygonPath, unitRaster.nrow(), unitRaster.ncol());
+            unitRaster = lapis::resampleRaster(unitRaster, projectAlign, lapis::ExtractMethod::near);
+            unitRaster = lapis::trimRaster(unitRaster);
+            if (!unitRaster.overlaps(projectArea.projectPoly.extent())) {
                 std::cerr << "Unit raster does not overlap project polygon\n";
                 throw lapis::OutsideExtentException();
             }
         }
         std::cout << " Done!\n";
 
+        rxtools::TaoGettersMP getters = rxtools::TaoGettersMP(
+            lapis::lico::alwaysAdd<lapis::VectorDataset<lapis::MultiPolygon>>,
+            projectArea.lidarDataset->coordGetter(),
+            projectArea.lidarDataset->heightGetter(),
+            projectArea.lidarDataset->radiusGetter(),
+            projectArea.lidarDataset->areaGetter(),
+            //TODO: at some point it would be good to not implicitly assume height units are not in meters.
+            [dm = dbhModel, hg = projectArea.lidarDataset->heightGetter()](const lapis::ConstFeature<lapis::MultiPolygon>& ft)->double {
+                return dm.predict(hg(ft), lapis::linearUnitPresets::meter);
+            }
+        );
 
-        projectArea.createCoreGapAndReadTaos(projectSettings.nThread, projectSettings.dbhMax, dbhFunc);
+        projectArea.createCoreGapAndReadTaos(ps->nThread, ps->dbhMax, getters);
 
         std::cout << "\t Performing PCA on climate data...";
         std::filebuf fb;
-        if (ps.referenceDatasetPath != "") {
-            if (!fb.open(ps.referenceDatasetPath, std::ios::in)) throw std::runtime_error("Cannot open reference table.");
+        if (ps->referenceDatasetPath != "") {
+            if (!fb.open(ps->referenceDatasetPath, std::ios::in)) throw std::runtime_error("Cannot open reference table.");
         }
         else {
-            if (!fb.open(ps.defaultRefPath, std::ios::in)) throw std::runtime_error("Cannot open internal reference table.");
+            if (!fb.open(ps->defaultRefPath, std::ios::in)) throw std::runtime_error("Cannot open internal reference table.");
         }
         std::istream is{ &fb };
 
@@ -178,22 +186,46 @@ namespace licosim {
 
     std::vector<int> Licosim::getKnn(rxtools::Lmu& lmu, const rxtools::LmuType& type, const double& maxDist, const int k) {
         auto rTmpClim = projectArea.aet;
-        rTmpClim.crop(lmu.mask);
-        rTmpClim.extend(lmu.mask);
+        rTmpClim = lapis::cropRaster(rTmpClim, lmu.mask, lapis::SnapType::out);
+        rTmpClim = lapis::extendRaster(rTmpClim, lmu.mask, lapis::SnapType::out);
         rTmpClim.mask(lmu.mask);
-        auto thisaet = xt::mean(xt::filter(rTmpClim.values().value(), rTmpClim.values().has_value()))();
+        double thisaet = 0;
+        int aetcount = 0;
+        for (lapis::cell_t c = 0; c < rTmpClim.ncell(); ++c) {
+            if (rTmpClim[c].has_value()) {
+                thisaet += rTmpClim[c].value();
+                aetcount++;
+            }
+        }
+        thisaet /= aetcount;
 
         rTmpClim = lapis::Raster(projectArea.cwd);
-        rTmpClim.crop(lmu.mask);
-        rTmpClim.extend(lmu.mask);
+        rTmpClim = lapis::cropRaster(rTmpClim, lmu.mask, lapis::SnapType::out);
+        rTmpClim = lapis::extendRaster(rTmpClim, lmu.mask, lapis::SnapType::out);
         rTmpClim.mask(lmu.mask);
-        auto thiscwd = xt::mean(xt::filter(rTmpClim.values().value(), rTmpClim.values().has_value()))();
+        double thiscwd = 0;
+        int cwdcount = 0;
+        for (lapis::cell_t c = 0; c < rTmpClim.ncell(); ++c) {
+            if (rTmpClim[c].has_value()) {
+                thiscwd += rTmpClim[c].value();
+                cwdcount++;
+            }
+        }
+        thiscwd /= cwdcount;
 
         rTmpClim = lapis::Raster(projectArea.tmn);
-        rTmpClim.crop(lmu.mask);
-        rTmpClim.extend(lmu.mask);
+        rTmpClim = lapis::cropRaster(rTmpClim, lmu.mask, lapis::SnapType::out);
+        rTmpClim = lapis::extendRaster(rTmpClim, lmu.mask, lapis::SnapType::out);
         rTmpClim.mask(lmu.mask);
-        auto thistmn = xt::mean(xt::filter(rTmpClim.values().value(), rTmpClim.values().has_value()))();
+        double thistmn = 0;
+        int tmncount = 0;
+        for (lapis::cell_t c = 0; c < rTmpClim.ncell(); ++c) {
+            if (rTmpClim[c].has_value()) {
+                thistmn += rTmpClim[c].value();
+                tmncount++;
+            }
+        }
+        thistmn /= tmncount;
 
         Eigen::RowVector3d pcClimate; 
         pcClimate << thisaet, thiscwd, thistmn;
@@ -210,7 +242,7 @@ namespace licosim {
             return neFacingLmu.detailedQuery(pcClimate, k, false, maxDist);
     }
 
-    void Licosim::assignTargetThread(int& sofar, int& nLmu, rxtools::Lmu& lmu, const int thisThread) {
+    void Licosim::assignTargetThread(size_t& sofar, size_t& nLmu, rxtools::Lmu& lmu, const int thisThread) {
         std::cout << "\t Assigning targets to Lmu " + std::to_string(sofar) + "/" + std::to_string(nLmu) + " on thread " + std::to_string(thisThread) + "\n";
         auto k = getKnn(lmu, lmu.type, maxDist, 20);
         if (k.size() == 0) {
@@ -220,30 +252,30 @@ namespace licosim {
             k = getKnn(lmu, rxtools::LmuType::all, 0, 20); //defaults to max dist = max double, 10 samples.
         }
 
-        auto thisOsiNum = lapis::crop(projectArea.bbOsiNum, lmu.mask);
-        auto thisOsiDen = lapis::crop(projectArea.bbOsiDen, lmu.mask);
+        auto thisOsiNum = lapis::cropRaster(projectArea.bbOsiNum, lmu.mask, lapis::SnapType::out);
+        auto thisOsiDen = lapis::cropRaster(projectArea.bbOsiDen, lmu.mask, lapis::SnapType::out);
         for (int i : k) {
             lmu.targetLmuNames.push_back(names[i] + "_" + std::to_string(ids[i]));
             lmu.structures.push_back(refStructures[i]);
         }
-        lmu.assignUnitTargets(dre, projectSettings.dbhMax, projectSettings.overrideTargets);
+        lmu.assignUnitTargets(dre, ProjectSettings::get().dbhMax, ProjectSettings::get().overrideTargets);
     }
 
     void Licosim::doTreatmentThreaded(int nThread, double dbhMin, double dbhMax) {
-        std::filesystem::path p(projectSettings.outputPath);
-        if (projectSettings.writeUnits) {
+        std::filesystem::path p(ProjectSettings::get().outputPath);
+        if (ProjectSettings::get().writeUnits) {
             p /= "lmus";
             if (!std::filesystem::exists(p)) {
                 std::filesystem::create_directories(p);
             }
         }
 
-        lapis::Raster<int> unitZonal{ (lapis::Alignment)projectArea.lmuIds };
-        paired = lapis::Raster<int>{ (lapis::Alignment)projectArea.lmuIds };
+        lapis::Raster<lapis::cell_t> unitZonal{ (lapis::Alignment)projectArea.lmuIds };
+        paired = lapis::Raster<lapis::cell_t>{ (lapis::Alignment)projectArea.lmuIds };
 
         rxtools::TaoListMP treatedTaos{};
         std::mutex mut{};
-        int sofar = 0;
+        size_t sofar = 0;
         std::vector<std::thread> threads{};
         auto threadFunc = [&](int i) { treatmentThread(sofar, mut, dbhMin, dbhMax, unitZonal, treatedTaos, i); };
         for (int i = 0; i < nThread; ++i) {
@@ -258,16 +290,21 @@ namespace licosim {
         auto postNum = lapis::Raster<int>{ (lapis::Alignment)projectArea.lmuIds };
         auto postDen = lapis::Raster<int>{ (lapis::Alignment)projectArea.lmuIds };
         std::pair<lapis::coord_t, lapis::coord_t> expectedRes{};
-        if (projectArea.lidarDataset->getConvFactor() == 1) {
-            expectedRes.first = 0.75;
+        if (projectArea.lidarDataset->type() == processedfolder::RunType::fusion) {
+            if (projectArea.lidarDataset->units() == lapis::linearUnitPresets::meter) {
+                expectedRes.first = 0.75;
+            }
+            else {
+                expectedRes.first = 2.4606;
+            }
         }
         else {
-            expectedRes.first = 2.4606;
+            expectedRes.first = lapis::Raster<lapis::coord_t>(processedfolder::stringOrThrow(projectArea.lidarDataset->csmRaster(0))).xres();
         }
         expectedRes.second = 0;
         threads.clear();
         sofar = 0;
-        auto postGapFunc = [&](int i) { projectArea.postGapThread(postNum, postDen, treatedTaos, projectSettings.nThread, i, mut, sofar, projectArea.lmuRaster, 2, 6, expectedRes); };
+        auto postGapFunc = [&](int i) { projectArea.postGapThread(postNum, postDen, treatedTaos, ProjectSettings::get().nThread, i, mut, sofar, projectArea.lmuRaster, 2, 6, expectedRes); };
         for (int i = 0; i < nThread; ++i) {
             threads.push_back(std::thread(postGapFunc, i));
         }
@@ -276,40 +313,39 @@ namespace licosim {
         }
 
         std::cout << "Calculating post OSI zones...\n";
-        lsmetrics::zonal_function<xtl::xoptional<int>, int> zSum = lsmetrics::zonalNoDataSum<int>;
-        auto numZones = lsmetrics::zonalStatisticsByRaster(postNum, unitZonal, zSum);
-        auto denZones = lsmetrics::zonalStatisticsByRaster(postDen, unitZonal, zSum);
+        auto numZones = lapis::zonalSum(postNum, unitZonal);
+        auto denZones = lapis::zonalSum(postDen, unitZonal);
 
-        lapis::Raster<double> postOsi{ (spatial::Alignment)unitZonal };
+        lapis::Raster<double> postOsi{ (lapis::Alignment)unitZonal };
         for (auto z : numZones) {
-            bool hv = z.second.has_value();
-            if (hv) {
-                double osi = static_cast<double>(z.second.value()) / static_cast<double>(denZones.find(z.first)->second.value()) * 100;
-                xt::filtration(postOsi.values().value(), xt::equal(unitZonal.values().value(), z.first)) = osi;
-                xt::filtration(postOsi.values().has_value(), xt::equal(unitZonal.values().value(), z.first)) = true;
+            double osi = static_cast<double>(z.second) / static_cast<double>(denZones.find(z.first)->second) * 100;
+            for (lapis::cell_t c = 0; c < postOsi.ncell(); ++c) {
+                if (unitZonal[c].value() == z.first) {
+                    postOsi[c].value() = osi;
+                    postOsi[c].has_value() = true;
+                }
             }
         }
-        postOsi.crop(output.pre[3]);
-        postOsi.extend(output.pre[3]);
+        postOsi = lapis::cropRaster(postOsi, output.pre[3], lapis::SnapType::out);
+        postOsi = lapis::extendRaster(postOsi, output.pre[3], lapis::SnapType::out);
         postOsi.mask(output.pre[3]);
         output.post[3] = postOsi;
 
-        auto ft = output.shp.getFeaturesPtr();
-        for (size_t i = 0; i < ft->size(); ++i) {
-            auto v = std::stoi(ft->at(i).getAttribute("id"));
+        for (size_t i = 0; i < output.atts.nFeature(); ++i) {
+            auto v = std::stoi(output.atts.getStringField(i, "ID"));
             if (numZones.find(v) == numZones.end()) {
                 std::cout << "failed to find: " << v << "\n";
                 continue;
             }
-            double osi = static_cast<double>(numZones.at(v).value()) / static_cast<double>(denZones.at(v).value()) * 100;
-            ft->at(i).setAttribute(18, osi);
+            double osi = static_cast<double>(numZones.at(v)) / static_cast<double>(denZones.at(v)) * 100;
+            output.atts.setRealField(i, "treatedOSI", osi);
         }
         std::cout << "Treatment done\n";
     }
 
-    void Licosim::treatmentThread(int& sofar, std::mutex& mut, double dbhMin, double dbhMax, lapis::Raster<int>& unitZonal, lico::TaoList& treatedTaos, const int thisThread) {
-        int nLmu = projectArea.regionType.size();
-        std::filesystem::path p(projectSettings.outputPath);
+    void Licosim::treatmentThread(size_t& sofar, std::mutex& mut, double dbhMin, double dbhMax, lapis::Raster<lapis::cell_t>& unitZonal, rxtools::TaoListMP& treatedTaos, const int thisThread) {
+        size_t nLmu = projectArea.regionType.size();
+        std::filesystem::path p(ProjectSettings::get().outputPath);
         p /= "lmus";
 
         int failedToAdd = 0;
@@ -318,7 +354,7 @@ namespace licosim {
         while (true) {
 
             mut.lock();
-            int i = sofar;
+            size_t i = sofar;
             ++sofar;    
             mut.unlock();
             //if (i != 4507) continue;
@@ -339,8 +375,8 @@ namespace licosim {
 
                 rxtools::TaoListMP taos{};
                 for (size_t j = 0; j < projectArea.allTaos.size(); ++j) {
-                    if (lmu.mask.extract(projectArea.allTaos.x(j), projectArea.allTaos.y(j)).has_value())
-                        taos.addTAO(projectArea.allTaos[j]);
+                    if (lmu.mask.extract(projectArea.allTaos.x(j), projectArea.allTaos.y(j), lapis::ExtractMethod::near).has_value())
+                        taos.taoVector.addFeature(projectArea.allTaos.taoVector.getFeature(j));
                 }
 
                 auto after = std::chrono::high_resolution_clock::now();
@@ -349,13 +385,13 @@ namespace licosim {
 
                 std::cout << "\tCreating Units for Lmu " + std::to_string(i) + "/" + std::to_string(nLmu) + " on thread " + std::to_string(thisThread) + "\n";
                 before = std::chrono::high_resolution_clock::now();
-                auto thisOsiNum = lapis::crop(projectArea.osiNum, lmu.mask);
-                auto thisOsiDen = lapis::crop(projectArea.osiDen, lmu.mask);
+                auto thisOsiNum = lapis::cropRaster(projectArea.osiNum, lmu.mask, lapis::SnapType::out);
+                auto thisOsiDen = lapis::cropRaster(projectArea.osiDen, lmu.mask, lapis::SnapType::out);
 
                 if (shp)
-                    lmu.makeUnits(unitPoly, taos, thisOsiNum, thisOsiDen, projectArea.lidarDataset->getConvFactor(), dbhFunc, projectSettings.overrideTargets);
+                    lmu.makeUnits(unitPoly, taos, thisOsiNum, thisOsiDen, ProjectSettings::get().overrideTargets);
                 else
-                    lmu.makeUnits(unitRaster, taos, thisOsiNum, thisOsiDen, projectArea.lidarDataset->getConvFactor(), dbhFunc);
+                    lmu.makeUnits(unitRaster, taos, thisOsiNum, thisOsiDen);
 
                 after = std::chrono::high_resolution_clock::now();
                 duration = std::chrono::duration_cast<std::chrono::seconds>(after - before);
@@ -372,7 +408,7 @@ namespace licosim {
                 std::cout << "\tTreating Lmu " + std::to_string(i) + "/" + std::to_string(nLmu) + " on thread " + std::to_string(thisThread) + "\n";
                 before = std::chrono::high_resolution_clock::now();
                 for (int j = 0; j < lmu.units.size(); ++j) {
-                    if (projectSettings.overrideTargets) {
+                    if (ProjectSettings::get().overrideTargets) {
                         if (lmu.units[j].dbhMin < 0) {
                             lmu.units[j].dbhMin = dbhMin;
                             lmu.units[j].dbhMax = dbhMax;
@@ -384,7 +420,7 @@ namespace licosim {
                     }
 
                     if (lmu.units[j].currentStructure.ba > lmu.units[j].targetStructure.ba) {
-                        int a = lmu.units[j].taos.size();
+                        size_t a = lmu.units[j].taos.size();
                         try {
                             auto trt = treater.doTreatment(lmu.units[j], lmu.units[j].dbhMin, lmu.units[j].dbhMax, 3);
                             lmu.units[j].treatedTaos = std::get<0>(trt);
@@ -396,10 +432,10 @@ namespace licosim {
                             lmu.write((p / std::to_string(i)).string(), ffa);
                             //throw std::runtime_error("you've been dooped");
                         }
-                        int b = lmu.units[j].treatedTaos.size();
+                        size_t b = lmu.units[j].treatedTaos.size();
 
-                        lmu.units[j].treatedStructure = lmu.units[j].summarizeStructure(lmu.units[j].treatedTaos, 0, lmu.units[j].dbhFunc);
-                        int c = lmu.units[j].treatedTaos.size();
+                        lmu.units[j].treatedStructure = rxtools::StructureSummary(lmu.units[j].treatedTaos, lmu.units[j].unitMask, lmu.units[j].areaHa, 0);
+                        size_t c = lmu.units[j].treatedTaos.size();
 
                         if (lmu.units[j].targetStructure.ba - lmu.units[j].treatedStructure.ba > 1) {
                             std::cout << "Post treat <<< target ba " + std::to_string(i) + "  " + std::to_string(j) + " " + std::to_string(a) + " " + std::to_string(b) + " " + std::to_string(c) + "\n";
@@ -415,9 +451,9 @@ namespace licosim {
                         lmu.units[j].treatedStructure = lmu.units[j].currentStructure;
                     }
                     lmu.units[j].treated = true;
-                    lmu.units[j].unitMask.values().value().fill(i * 10000 + j);
-
-                    std::vector<lapis::Raster<int>*> v = { &lmu.units[j].unitMask, &unitZonal };
+                    for (lapis::cell_t c = 0; c < lmu.units[j].unitMask.ncell(); ++c) {
+                        lmu.units[j].unitMask[c].value() = i * 10000 + j;
+                    }
 
                     mut.lock();
                     std::cout << "Thread " + std::to_string(thisThread) + " adding rxunit. i = " + std::to_string(i) + "\n";
@@ -431,13 +467,15 @@ namespace licosim {
                         continue;
                     }*/
                     for (size_t k = 0; k < lmu.units[j].treatedTaos.size(); ++k)
-                        treatedTaos.addTAO(lmu.units[j].treatedTaos[k]);
-                    unitZonal = lapis::rasterMergeInterior(v);
+                        treatedTaos.taoVector.addFeature(lmu.units[j].treatedTaos.taoVector.getFeature(k));
+
+                    unitZonal.overlayInside(lmu.units[j].unitMask);
 
                     auto tmp = lmu.units[j].unitMask;
-                    tmp.values().value().fill(lmu.units[j].paired);
-                    v = { &tmp, &paired };
-                    paired = lapis::rasterMergeInterior(v);
+                    for (lapis::cell_t c = 0; c < tmp.ncell(); ++c) {
+                        tmp[c].value() = lmu.units[j].paired;
+                    }
+                    paired.overlayInside(tmp);
 
                     mut.unlock();
                 }
@@ -445,7 +483,7 @@ namespace licosim {
                 duration = std::chrono::duration_cast<std::chrono::seconds>(after - before);
                 std::cout << "Thread " + std::to_string(thisThread) + " completed in " + std::to_string(duration.count()) + " seconds.\n";
 
-                if (projectSettings.writeUnits) {
+                if (ProjectSettings::get().writeUnits) {
                     std::filesystem::create_directory(p / std::to_string(i));
                     lmu.write((p / std::to_string(i)).string(), ffa);
                 }

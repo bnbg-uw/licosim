@@ -1,15 +1,15 @@
-//Struct for holding options parsed from cmd line. 
+//Singleton struct for holding options parsed from cmd line. 
 
 //TODO: handle landscape indices.
 
 #pragma once
 
-#ifndef rxtools_projectsettings_h
-#define rxtools_projectsettings_h
+#ifndef licosim_projectsettings_h
+#define licosim_projectsettings_h
 
-#include "rxtools_pch.hpp"
+#include "boost/program_options.hpp"
 
-namespace rxtools {
+namespace licosim {
     struct ProjectSettings {
     public:
         std::string exeParentPath;
@@ -39,8 +39,12 @@ namespace rxtools {
         int seed = -1;
         double dbhMin = 15.24;
         double dbhMax = 53.34;
-        std::vector<double> allom_coefficients;
-        bool allomPower = true;
+        double slope = 0;
+        double intercept = 0;
+        double rsq = 0;
+        rxtools::allometry::UnivariateLinearModel::Transform transform;
+        lapis::LinearUnit inUnit;
+        lapis::LinearUnit outUnit;
 
         bool useFireRef = true;
         bool useHydroRef = false;
@@ -132,7 +136,71 @@ namespace rxtools {
             climateClassPath = exeParentPath + climateClassPath;
 
 
-            allom_coefficients = vm.count("allom") ? vm["allom"].as<std::vector<double>>() : std::vector<double>{};
+            if (vm.count("allom_slope") &&
+                vm.count("allom_intercept") &&
+                vm.count("allom_rsq") &&
+                vm.count("allom_transform") &&
+                vm.count("allom_inunits") &&
+                vm.count("allom_outunits")) {
+                slope = vm["allom_slope"].as<double>();
+                intercept = vm["allom_intercept"].as<double>();
+                rsq = vm["allom_rsq"].as<double>();
+
+                auto tStr = vm["allom_transform"].as<std::string>();
+                for (char& c : tStr) {
+                    c = std::tolower(static_cast<unsigned char>(c));
+                }
+                if(tStr == "none") {
+                    transform = rxtools::allometry::UnivariateLinearModel::Transform::None;
+                }
+                else if (tStr == "square") {
+                    transform = rxtools::allometry::UnivariateLinearModel::Transform::Square;
+                }
+                else if (tStr == "cube") {
+                    transform = rxtools::allometry::UnivariateLinearModel::Transform::Cube;
+                }
+                else if (tStr == "power") {
+                    transform = rxtools::allometry::UnivariateLinearModel::Transform::Power;
+                }
+                else {
+                    std::cout << "\"" + tStr + "\" is not a valid tranform. Choose one of (none, square, cube, power)";
+                    throw std::invalid_argument("invalid allom transform");
+                }
+
+                tStr = vm["allom_inunits"].as<std::string>();
+                for (char& c : tStr) {
+                    c = std::tolower(static_cast<unsigned char>(c));
+                }
+                if (tStr == "feet") {
+                    inUnit = lapis::linearUnitPresets::internationalFoot;
+                }
+                else if (tStr == "meters") {
+                    inUnit = lapis::linearUnitPresets::meter;
+                }
+                else {
+                    std::cout << "\"" + tStr + "\" is not a valid input unit. Choose one of (feet, meters)";
+                    throw std::invalid_argument("invalid allom inunit");
+                }
+
+
+                tStr = vm["allom_outunits"].as<std::string>();
+                for (char& c : tStr) {
+                    c = std::tolower(static_cast<unsigned char>(c));
+                }
+                if (tStr == "inches") {
+                    inUnit = lapis::linearUnitPresets::internationalFoot;
+                }
+                else if (tStr == "centimeters") {
+                    inUnit = lapis::linearUnitPresets::meter;
+                }
+                else if (tStr == "meters") {
+                    inUnit = lapis::linearUnitPresets::meter;
+                }
+                else {
+                    std::cout << "\"" + tStr + "\" is not a valid input unit. Choose one of (inches, centimeters, meters)";
+                    throw std::invalid_argument("invalid allom inunit");
+                }
+            }
             nThread = vm["thread"].as<int>();
 
             if (vm.count("seed")) seed = vm["seed"].as<int>();
@@ -171,6 +239,6 @@ namespace rxtools {
         ProjectSettings(const ProjectSettings&) = delete;
         ProjectSettings& operator=(const ProjectSettings&) = delete;
     };
-}  // namespace rxtools
+}  // namespace licosim
 
-#endif  // !rxtools_projectsettings_h
+#endif  // !licosim_projectsettings_h
