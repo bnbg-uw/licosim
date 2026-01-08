@@ -36,22 +36,22 @@ namespace licosim {
         else {
             std::cout << "FIA plots...";
             auto reader = rxtools::allometry::FIAReader(ps->fiaPath);
-            auto backup = reader.plots;
-            if(!reader.limitByExtent(projectArea.projectPoly.extent())) {
-                reader.plots = backup;
-                std::cout << "No fia plots in study area, falling back to 5km buffer around study area...";
-                auto dist = projectArea.lidarDataset->units().value().convertOneToThis(5000, lapis::linearUnitPresets::meter);
-                lapis::Extent e(projectArea.projectPoly.extent().xmin() - dist, projectArea.projectPoly.extent().xmax() + dist,
-                                  projectArea.projectPoly.extent().ymin() - dist, projectArea.projectPoly.extent().ymax() + dist,
-                                  projectArea.projectPoly.crs());
-                if (!reader.limitByExtent(e))
-                    throw std::runtime_error("no fia in this place");
-            }
+            auto dist = projectArea.lidarDataset->units().value().convertOneToThis(10000, lapis::linearUnitPresets::meter);
+            lapis::Extent e(projectArea.projectPoly.extent().xmin() - dist, projectArea.projectPoly.extent().xmax() + dist,
+                projectArea.projectPoly.extent().ymin() - dist, projectArea.projectPoly.extent().ymax() + dist,
+                projectArea.projectPoly.crs());
+            if (!reader.limitByExtent(e))
+                throw std::runtime_error("no fia in this place");
             reader.makePlotTreeMap(std::vector<std::string>{ "DIA" });
             auto allTrees = reader.collapsePlotTreeMap();
             dbhModel = rxtools::allometry::UnivariateLinearModel(allTrees, "DIA", rxtools::linearUnitPresets::inch);
             std::cout << " Done!\n";
-            std::cout << dbhModel.parameters.intercept << " " << dbhModel.parameters.slope << " " << int(dbhModel.parameters.transform) << "\n";
+            std::cout << "intercept: " << dbhModel.parameters.intercept << "\n";
+            std::cout << "slope: " << dbhModel.parameters.slope << "\n";
+            std::cout << "transform: " << int(dbhModel.parameters.transform) << "\n";
+            std::cout << "rsq: " << dbhModel.parameters.rsq << "\n";
+            std::cout << "inUnit: " << dbhModel.inputUnit.name() << "\n";
+            std::cout << "outUnit: " << dbhModel.outputUnit.name() << "\n";
 
             if (ps->writeUnits && ps->fastFuels) {
                 ffa = rxtools::allometry::FastFuels(allTrees);
@@ -299,7 +299,17 @@ namespace licosim {
             }
         }
         else {
-            expectedRes.first = lapis::Raster<lapis::coord_t>(processedfolder::stringOrThrow(projectArea.lidarDataset->csmRaster(0))).xres();
+            expectedRes.first = -1;
+            for (size_t i = 0; i < projectArea.lidarDataset->nTiles(); ++i) {
+                auto csmFile = projectArea.lidarDataset->csmRaster(i);
+                if (csmFile) {
+                    expectedRes.first = lapis::Raster<lapis::coord_t>(csmFile.value().string()).xres();
+                    break;
+                }
+            }
+            if (expectedRes.first < 0) {
+                throw processedfolder::FileNotFoundException("no tiles with data found.");
+            }
         }
         expectedRes.second = 0;
         threads.clear();
@@ -332,7 +342,7 @@ namespace licosim {
         output.post[3] = postOsi;
 
         for (size_t i = 0; i < output.atts.nFeature(); ++i) {
-            auto v = std::stoi(output.atts.getStringField(i, "ID"));
+            auto v = output.atts.getIntegerField(i, "ID");
             if (numZones.find(v) == numZones.end()) {
                 std::cout << "failed to find: " << v << "\n";
                 continue;
