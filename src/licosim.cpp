@@ -44,6 +44,7 @@ namespace licosim {
                 throw std::runtime_error("no fia in this place");
             reader.makePlotTreeMap(std::vector<std::string>{ "DIA" });
             auto allTrees = reader.collapsePlotTreeMap();
+            allTrees.writeCsv("G:/fiadata.csv");
             dbhModel = rxtools::allometry::UnivariateLinearModel(allTrees, "DIA", rxtools::linearUnitPresets::inch);
             std::cout << " Done!\n";
             std::cout << "intercept: " << dbhModel.parameters.intercept << "\n";
@@ -92,11 +93,12 @@ namespace licosim {
             projectArea.lidarDataset->areaGetter(),
             //TODO: at some point it would be good to not implicitly assume height units are not in meters.
             [dm = dbhModel, hg = projectArea.lidarDataset->heightGetter()](const lapis::ConstFeature<lapis::MultiPolygon>& ft)->double {
-                return dm.predict(hg(ft), lapis::linearUnitPresets::meter);
+                return dm.predict(hg(ft), lapis::linearUnitPresets::meter, rxtools::linearUnitPresets::centimeter);
             }
         );
 
         projectArea.createCoreGapAndReadTaos(ps->nThread, ps->dbhMax, getters);
+        std::cout << "Alltaos size: " << projectArea.allTaos.size() << "\n";
 
         std::cout << "\t Performing PCA on climate data...";
         std::filebuf fb;
@@ -243,7 +245,7 @@ namespace licosim {
     }
 
     void Licosim::assignTargetThread(size_t& sofar, size_t& nLmu, rxtools::Lmu& lmu, const int thisThread) {
-        std::cout << "\t Assigning targets to Lmu " + std::to_string(sofar) + "/" + std::to_string(nLmu) + " on thread " + std::to_string(thisThread) + "\n";
+        std::cout << "\t Assigning targets to Lmu " + std::to_string(sofar+1) + "/" + std::to_string(nLmu) + " on thread " + std::to_string(thisThread) + "\n";
         auto k = getKnn(lmu, lmu.type, maxDist, 20);
         if (k.size() == 0) {
             k = getKnn(lmu, rxtools::LmuType::all, maxDist, 20);
@@ -273,7 +275,7 @@ namespace licosim {
         lapis::Raster<lapis::cell_t> unitZonal{ (lapis::Alignment)projectArea.lmuIds };
         paired = lapis::Raster<lapis::cell_t>{ (lapis::Alignment)projectArea.lmuIds };
 
-        rxtools::TaoListMP treatedTaos{};
+        rxtools::TaoListMP treatedTaos{ projectArea.allTaos, true };
         std::mutex mut{};
         size_t sofar = 0;
         std::vector<std::thread> threads{};
@@ -348,7 +350,7 @@ namespace licosim {
                 continue;
             }
             double osi = static_cast<double>(numZones.at(v)) / static_cast<double>(denZones.at(v)) * 100;
-            output.atts.setRealField(i, "treatedOSI", osi);
+            output.atts.setRealField(i, "trtOSI", osi);
         }
         std::cout << "Treatment done\n";
     }
@@ -373,7 +375,7 @@ namespace licosim {
                 break;
             }
 
-            try {
+            //try {
                 auto before = std::chrono::high_resolution_clock::now();
                 //if (i != 6461) continue;
                 auto lmu = projectArea.createLmuThread(i, thisThread);
@@ -383,11 +385,12 @@ namespace licosim {
                     projectArea.aet.ymax() - projectArea.aet.yres() / 2);
                 if (!lmu.mask.overlaps(e)) continue;
 
-                rxtools::TaoListMP taos{};
+                rxtools::TaoListMP taos{ projectArea.allTaos, true };
                 for (size_t j = 0; j < projectArea.allTaos.size(); ++j) {
                     if (lmu.mask.extract(projectArea.allTaos.x(j), projectArea.allTaos.y(j), lapis::ExtractMethod::near).has_value())
                         taos.taoVector.addFeature(projectArea.allTaos.taoVector.getFeature(j));
                 }
+                std::cout << "LMU taos size: " << taos.size() << "\n";
 
                 auto after = std::chrono::high_resolution_clock::now();
                 auto duration = std::chrono::duration_cast<std::chrono::seconds>(after - before);
@@ -415,7 +418,7 @@ namespace licosim {
                 std::cout << "Thread " + std::to_string(thisThread) + " completed in " + std::to_string(duration.count()) + " seconds.\n";
 
                 //treat like below
-                std::cout << "\tTreating Lmu " + std::to_string(i) + "/" + std::to_string(nLmu) + " on thread " + std::to_string(thisThread) + "\n";
+                std::cout << "\tTreating Lmu " + std::to_string(i+1) + "/" + std::to_string(nLmu) + " on thread " + std::to_string(thisThread) + "\n";
                 before = std::chrono::high_resolution_clock::now();
                 for (int j = 0; j < lmu.units.size(); ++j) {
                     if (ProjectSettings::get().overrideTargets) {
@@ -431,23 +434,24 @@ namespace licosim {
 
                     if (lmu.units[j].currentStructure.ba > lmu.units[j].targetStructure.ba) {
                         size_t a = lmu.units[j].taos.size();
-                        try {
+                        //try {
                             auto trt = treater.doTreatment(lmu.units[j], lmu.units[j].dbhMin, lmu.units[j].dbhMax, 3);
                             lmu.units[j].treatedTaos = std::get<0>(trt);
-                        }
+                        /* }
                         catch (std::exception e) {
                             std::cout << e.what();
                             std::cout << " duplicates in treat " + std::to_string(i) + "  " + std::to_string(j) + "\n";
                             std::filesystem::create_directory(p / std::to_string(i));
                             lmu.write((p / std::to_string(i)).string(), ffa);
-                            //throw std::runtime_error("you've been dooped");
-                        }
+                            throw std::runtime_error("you've been dooped");
+                        }*/
                         size_t b = lmu.units[j].treatedTaos.size();
 
                         lmu.units[j].treatedStructure = rxtools::StructureSummary(lmu.units[j].treatedTaos, lmu.units[j].unitMask, lmu.units[j].areaHa, 0);
                         size_t c = lmu.units[j].treatedTaos.size();
 
                         if (lmu.units[j].targetStructure.ba - lmu.units[j].treatedStructure.ba > 1) {
+                            mut.lock();
                             std::cout << "Post treat <<< target ba " + std::to_string(i) + "  " + std::to_string(j) + " " + std::to_string(a) + " " + std::to_string(b) + " " + std::to_string(c) + "\n";
                             std::filesystem::create_directory(p / std::to_string(i));
                             lmu.write((p / std::to_string(i)).string(), ffa);
@@ -497,11 +501,11 @@ namespace licosim {
                     std::filesystem::create_directory(p / std::to_string(i));
                     lmu.write((p / std::to_string(i)).string(), ffa);
                 }
-            }
+            /*}
             catch (std::exception e) {
                 std::cerr << e.what() << " on thread " << std::to_string(thisThread);
                 throw e;
-            }
+            }*/
         }
         /*std::cout << "Failed to add " << failedToAdd << "Treatment units\n";
         for (int i : failedIds) {
