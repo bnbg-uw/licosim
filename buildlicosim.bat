@@ -45,7 +45,7 @@ IF EXIST src\rxtools\ (
 rmdir /S /Q build
 mkdir build
 pushd build
-cmake .. -DCMAKE_TOOLCHAIN_FILE=%vcpkg%\scripts\buildsystems\vcpkg.cmake -DVCPKG_TARGET_TRIPLET=%triplet%
+cmake .. -DCMAKE_TOOLCHAIN_FILE=%vcpkg%\scripts\buildsystems\vcpkg.cmake -DVCPKG_TARGET_TRIPLET=%triplet% -DPROJ_DB_PATH=%vcpkg%\installed\%triplet%\share\proj\proj.db
 popd
 
 build\licosim.sln
