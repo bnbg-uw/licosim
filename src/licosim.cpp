@@ -1,4 +1,4 @@
-#include "licosim.hpp"
+﻿#include "licosim.hpp"
 #include <chrono>
 
 namespace licosim {
@@ -44,7 +44,7 @@ namespace licosim {
                 throw std::runtime_error("no fia in this place");
             reader.makePlotTreeMap(std::vector<std::string>{ "DIA" });
             auto allTrees = reader.collapsePlotTreeMap();
-            allTrees.writeCsv("G:/fiadata.csv");
+            allTrees.writeCsv(ProjectSettings::get().outputPath + "/fia_tree_data.csv");
             dbhModel = rxtools::allometry::UnivariateLinearModel(allTrees, "DIA", rxtools::linearUnitPresets::inch);
             std::cout << " Done!\n";
             std::cout << "intercept: " << dbhModel.parameters.intercept << "\n";
@@ -109,7 +109,6 @@ namespace licosim {
             if (!fb.open(ps->defaultRefPath, std::ios::in)) throw std::runtime_error("Cannot open internal reference table.");
         }
         std::istream is{ &fb };
-
         rxtools::utilities::readCSVLine(is); //skip colnames.
         while (!is.eof()) {
             auto row = rxtools::utilities::readCSVLine(is);
@@ -314,12 +313,32 @@ namespace licosim {
             }
         }
         expectedRes.second = 0;
+
         threads.clear();
-        sofar = 0;
-        auto postGapFunc = [&](int i) { projectArea.postGapThread(postNum, postDen, treatedTaos, ProjectSettings::get().nThread, i, mut, sofar, projectArea.lmuRaster, 2, 6, expectedRes); };
+        std::queue<rxtools::ProjectArea::CoreGapWorkItem> workQ;
+        std::condition_variable cvWork;   // I/O → Workers
+        std::condition_variable cvQ;  // Workers → I/O
+        bool ioComplete = false;
+        double coreGapDist = 6;
+
+        std::thread ioThread([&]() {
+            projectArea.coreGapIOThread(workQ, mut, cvWork, cvQ, ioComplete, 
+                projectArea.lmuRaster, coreGapDist, expectedRes, 
+                treatedTaos.getters, true, nThread);
+            });
+
+        auto postGapFunc = [&](int i) { 
+            projectArea.postGapWorkThread(
+                postNum, postDen, treatedTaos,
+                i, mut, workQ, cvWork, cvQ, ioComplete,
+                projectArea.lmuRaster, 2, coreGapDist
+            ); };
+
         for (int i = 0; i < nThread; ++i) {
             threads.push_back(std::thread(postGapFunc, i));
         }
+
+        ioThread.join();
         for (int i = 0; i < nThread; ++i) {
             threads[i].join();
         }

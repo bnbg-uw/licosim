@@ -115,9 +115,6 @@ namespace licosim {
 
             lmuRasterPath = vm.count("lmu") ? vm["lmu"].as<std::string>() : "";
 
-            priorityMethod = vm["priority"].as<std::string>();
-            priorityColumn = vm.count("column") ? vm["column"].as<std::string>() : "column";
-            try { if (std::stoi(priorityColumn) < 0) throw std::invalid_argument("Invalid column index"); } catch (...) {}
             if (vm.count("terrain")) terrain = vm["terrain"].as<std::string>();
             referenceDatasetPath = vm.count("reference") ? vm["reference"].as<std::string>() : "";
             if (vm.count("aet"))
