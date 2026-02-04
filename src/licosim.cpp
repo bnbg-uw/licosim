@@ -97,33 +97,35 @@ namespace licosim {
             }
         );
 
-        projectArea.createCoreGapAndReadTaos(ps->nThread, ps->dbhMax, getters);
+        std::cout << "Reading Taos...";
+        projectArea.allTaos = rxtools::TaoListMP(std::move(projectArea.lidarDataset->allPolygons()), getters);
         std::cout << "Alltaos size: " << projectArea.allTaos.size() << "\n";
 
         std::cout << "\t Performing PCA on climate data...";
-        std::filebuf fb;
+        std::unique_ptr<csv::CSVReader> csv;
         if (ps->referenceDatasetPath != "") {
-            if (!fb.open(ps->referenceDatasetPath, std::ios::in)) throw std::runtime_error("Cannot open reference table.");
+            csv = std::make_unique<csv::CSVReader>(ps->referenceDatasetPath);
         }
         else {
-            if (!fb.open(ps->defaultRefPath, std::ios::in)) throw std::runtime_error("Cannot open internal reference table.");
+            csv = std::make_unique<csv::CSVReader>(ps->defaultRefPath);
         }
-        std::istream is{ &fb };
-        rxtools::utilities::readCSVLine(is); //skip colnames.
-        while (!is.eof()) {
-            auto row = rxtools::utilities::readCSVLine(is);
-            if (row.size() <= 1)
-                continue;
-            names.push_back(row[0]);
-            ids.push_back(std::stoi(row[1]));
-            types.push_back(static_cast<rxtools::LmuType>(std::stoi(row[2])));
-            refStructures.push_back(rxtools::StructureSummary(std::stod(row[3]), std::stod(row[4]), std::stod(row[5]), std::stod(row[6]), std::stod(row[7]),
-                std::vector<double>{std::stod(row[8]), std::stod(row[9]), std::stod(row[10]), std::stod(row[11]), std::stod(row[12]), std::stod(row[13])}));
-            aet.push_back(std::stod(row[14]));
-            cwd.push_back(std::stod(row[15]));
-            tmn.push_back(std::stod(row[16]));
+        for (auto& row : *csv) {
+            names.push_back(row["name"].get<>());
+            ids.push_back(row["id"].get<int>());
+            types.push_back(static_cast<rxtools::LmuType>(row["type"].get<int>()));
+            refStructures.push_back(
+                rxtools::StructureSummary(
+                    row["ba"].get<double>(), row["tph"].get<double>(), row["mcs"].get<double>(), row["cc"].get<double>(),
+                    std::vector<double>{ 
+                        row["c1"].get<double>(), row["c2to4"].get<double>(), row["c5to9"].get<double>(),
+                        row["c10to14"].get<double>(), row["c15to29"].get<double>(), row["c30to35"].get<double>()
+                    }
+                )
+            );
+            aet.push_back(row["aet"].get<double>());
+            cwd.push_back(row["cwd"].get<double>());
+            tmn.push_back(row["tmn"].get<double>());
         }
-        fb.close();
 
         //Performing PCA.
         Eigen::MatrixXd data(aet.size(), 3);
@@ -253,8 +255,6 @@ namespace licosim {
             k = getKnn(lmu, rxtools::LmuType::all, 0, 20); //defaults to max dist = max double, 10 samples.
         }
 
-        auto thisOsiNum = lapis::cropRaster(projectArea.bbOsiNum, lmu.mask, lapis::SnapType::out);
-        auto thisOsiDen = lapis::cropRaster(projectArea.bbOsiDen, lmu.mask, lapis::SnapType::out);
         for (int i : k) {
             lmu.targetLmuNames.push_back(names[i] + "_" + std::to_string(ids[i]));
             lmu.structures.push_back(refStructures[i]);
@@ -284,92 +284,6 @@ namespace licosim {
         }
         for (int i = 0; i < nThread; ++i) {
             threads[i].join();
-        }
-
-        std::cout << "Calculating post treatment OSI\n";
-        //Post osi
-        auto postNum = lapis::Raster<int>{ (lapis::Alignment)projectArea.lmuIds };
-        auto postDen = lapis::Raster<int>{ (lapis::Alignment)projectArea.lmuIds };
-        std::pair<lapis::coord_t, lapis::coord_t> expectedRes{};
-        if (projectArea.lidarDataset->type() == processedfolder::RunType::fusion) {
-            if (projectArea.lidarDataset->units() == lapis::linearUnitPresets::meter) {
-                expectedRes.first = 0.75;
-            }
-            else {
-                expectedRes.first = 2.4606;
-            }
-        }
-        else {
-            expectedRes.first = -1;
-            for (size_t i = 0; i < projectArea.lidarDataset->nTiles(); ++i) {
-                auto csmFile = projectArea.lidarDataset->csmRaster(i);
-                if (csmFile) {
-                    expectedRes.first = lapis::Raster<lapis::coord_t>(csmFile.value().string()).xres();
-                    break;
-                }
-            }
-            if (expectedRes.first < 0) {
-                throw processedfolder::FileNotFoundException("no tiles with data found.");
-            }
-        }
-        expectedRes.second = 0;
-
-        threads.clear();
-        std::queue<rxtools::ProjectArea::CoreGapWorkItem> workQ;
-        std::condition_variable cvWork;   // I/O → Workers
-        std::condition_variable cvQ;  // Workers → I/O
-        bool ioComplete = false;
-        double coreGapDist = 6;
-
-        std::thread ioThread([&]() {
-            projectArea.coreGapIOThread(workQ, mut, cvWork, cvQ, ioComplete, 
-                projectArea.lmuRaster, coreGapDist, expectedRes, 
-                treatedTaos.getters, true, nThread);
-            });
-
-        auto postGapFunc = [&](int i) { 
-            projectArea.postGapWorkThread(
-                postNum, postDen, treatedTaos,
-                i, mut, workQ, cvWork, cvQ, ioComplete,
-                projectArea.lmuRaster, 2, coreGapDist
-            ); };
-
-        for (int i = 0; i < nThread; ++i) {
-            threads.push_back(std::thread(postGapFunc, i));
-        }
-
-        ioThread.join();
-        for (int i = 0; i < nThread; ++i) {
-            threads[i].join();
-        }
-
-        std::cout << "Calculating post OSI zones...\n";
-        auto numZones = lapis::zonalSum(postNum, unitZonal);
-        auto denZones = lapis::zonalSum(postDen, unitZonal);
-
-        lapis::Raster<double> postOsi{ (lapis::Alignment)unitZonal };
-        for (auto z : numZones) {
-            double osi = static_cast<double>(z.second) / static_cast<double>(denZones.find(z.first)->second) * 100;
-            for (lapis::cell_t c = 0; c < postOsi.ncell(); ++c) {
-                if (unitZonal[c].value() == z.first) {
-                    postOsi[c].value() = osi;
-                    postOsi[c].has_value() = true;
-                }
-            }
-        }
-        postOsi = lapis::cropRaster(postOsi, output.pre[3], lapis::SnapType::out);
-        postOsi = lapis::extendRaster(postOsi, output.pre[3], lapis::SnapType::out);
-        postOsi.mask(output.pre[3]);
-        output.post[3] = postOsi;
-
-        for (size_t i = 0; i < output.atts.nFeature(); ++i) {
-            auto v = output.atts.getIntegerField(i, "ID");
-            if (numZones.find(v) == numZones.end()) {
-                std::cout << "failed to find: " << v << "\n";
-                continue;
-            }
-            double osi = static_cast<double>(numZones.at(v)) / static_cast<double>(denZones.at(v)) * 100;
-            output.atts.setRealField(i, "trtOSI", osi);
         }
         std::cout << "Treatment done\n";
     }
@@ -417,13 +331,11 @@ namespace licosim {
 
                 std::cout << "\tCreating Units for Lmu " + std::to_string(i) + "/" + std::to_string(nLmu) + " on thread " + std::to_string(thisThread) + "\n";
                 before = std::chrono::high_resolution_clock::now();
-                auto thisOsiNum = lapis::cropRaster(projectArea.osiNum, lmu.mask, lapis::SnapType::out);
-                auto thisOsiDen = lapis::cropRaster(projectArea.osiDen, lmu.mask, lapis::SnapType::out);
 
                 if (shp)
-                    lmu.makeUnits(unitPoly, taos, thisOsiNum, thisOsiDen, ProjectSettings::get().overrideTargets);
+                    lmu.makeUnits(unitPoly, taos, ProjectSettings::get().overrideTargets);
                 else
-                    lmu.makeUnits(unitRaster, taos, thisOsiNum, thisOsiDen);
+                    lmu.makeUnits(unitRaster, taos);
 
                 after = std::chrono::high_resolution_clock::now();
                 duration = std::chrono::duration_cast<std::chrono::seconds>(after - before);
@@ -466,7 +378,7 @@ namespace licosim {
                         }*/
                         size_t b = lmu.units[j].treatedTaos.size();
 
-                        lmu.units[j].treatedStructure = rxtools::StructureSummary(lmu.units[j].treatedTaos, lmu.units[j].unitMask, lmu.units[j].areaHa, 0);
+                        lmu.units[j].treatedStructure = rxtools::StructureSummary(lmu.units[j].treatedTaos, lmu.units[j].unitMask, lmu.units[j].areaHa);
                         size_t c = lmu.units[j].treatedTaos.size();
 
                         if (lmu.units[j].targetStructure.ba - lmu.units[j].treatedStructure.ba > 1) {
