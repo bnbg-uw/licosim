@@ -18,9 +18,11 @@ namespace licosim {
         treater = rxtools::Treatment(dre);
         std::cout << "\tProject Area done!\n";
 
+        projectArea.lmuIds.writeRaster("G:/before.tif");
         if (ps->subdivideLmus) {
             projectArea.subdivideLmus(ps->climateClassPath, ps->nThread);
         }
+        projectArea.lmuIds.writeRaster("G:/after.tif");
 
         output = rxtools::Output(projectArea.lmuRaster);
         output.lmus = projectArea.lmuRaster;
@@ -66,7 +68,7 @@ namespace licosim {
         if (shp) {
             unitPoly = lapis::VectorDataset<lapis::MultiPolygon>(ps->unitPolygonPath);
             if (!unitPoly.crs().isConsistent(projectArea.projectPoly.crs()))
-                unitPoly.projectInPlacePreciseExtent(projectArea.projectPoly.crs());
+                unitPoly.projectInPlace(projectArea.projectPoly.crs());
             if (!unitPoly.extent().overlaps(projectArea.projectPoly.extent())) {
                 std::cerr << "Unit polygon does not overlap project polygon\n";
                 throw lapis::OutsideExtentException();
@@ -85,20 +87,24 @@ namespace licosim {
         }
         std::cout << " Done!\n";
 
-        rxtools::TaoGettersMP getters = rxtools::TaoGettersMP(
-            lapis::lico::alwaysAdd<lapis::VectorDataset<lapis::MultiPolygon>>,
+        rxtools::TaoGettersPt getters = rxtools::TaoGettersPt(
+            lapis::lico::alwaysAdd<lapis::VectorDataset<lapis::Point>>,
             projectArea.lidarDataset->coordGetter(),
             projectArea.lidarDataset->heightGetter(),
             projectArea.lidarDataset->radiusGetter(),
             projectArea.lidarDataset->areaGetter(),
             //TODO: at some point it would be good to not implicitly assume height units are not in meters.
-            [dm = dbhModel, hg = projectArea.lidarDataset->heightGetter()](const lapis::ConstFeature<lapis::MultiPolygon>& ft)->double {
+            [dm = dbhModel, hg = projectArea.lidarDataset->heightGetter()](const lapis::ConstFeature<lapis::Point>& ft)->double {
                 return dm.predict(hg(ft), lapis::linearUnitPresets::meter, rxtools::linearUnitPresets::centimeter);
             }
         );
 
+        auto before = std::chrono::high_resolution_clock::now();
         std::cout << "Reading Taos...";
-        projectArea.allTaos = rxtools::TaoListMP(std::move(projectArea.lidarDataset->allPolygons()), getters);
+        projectArea.allTaos = rxtools::TaoListPt(std::move(projectArea.lidarDataset->allHighPoints()), getters);
+        auto after = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> elapsed = after - before;
+        std::cout << " Done! Time taken: " << elapsed.count() << " seconds\n";
         std::cout << "Alltaos size: " << projectArea.allTaos.size() << "\n";
 
         std::cout << "\t Performing PCA on climate data...";
@@ -274,7 +280,7 @@ namespace licosim {
         lapis::Raster<lapis::cell_t> unitZonal{ (lapis::Alignment)projectArea.lmuIds };
         paired = lapis::Raster<lapis::cell_t>{ (lapis::Alignment)projectArea.lmuIds };
 
-        rxtools::TaoListMP treatedTaos{ projectArea.allTaos, true };
+        rxtools::TaoListPt treatedTaos{ projectArea.allTaos, true };
         std::mutex mut{};
         size_t sofar = 0;
         std::vector<std::thread> threads{};
@@ -288,7 +294,7 @@ namespace licosim {
         std::cout << "Treatment done\n";
     }
 
-    void Licosim::treatmentThread(size_t& sofar, std::mutex& mut, double dbhMin, double dbhMax, lapis::Raster<lapis::cell_t>& unitZonal, rxtools::TaoListMP& treatedTaos, const int thisThread) {
+    void Licosim::treatmentThread(size_t& sofar, std::mutex& mut, double dbhMin, double dbhMax, lapis::Raster<lapis::cell_t>& unitZonal, rxtools::TaoListPt& treatedTaos, const int thisThread) {
         size_t nLmu = projectArea.regionType.size();
         std::filesystem::path p(ProjectSettings::get().outputPath);
         p /= "lmus";
@@ -318,7 +324,7 @@ namespace licosim {
                     projectArea.aet.ymax() - projectArea.aet.yres() / 2);
                 if (!lmu.mask.overlaps(e)) continue;
 
-                rxtools::TaoListMP taos{ projectArea.allTaos, true };
+                rxtools::TaoListPt taos{ projectArea.allTaos, true };
                 for (size_t j = 0; j < projectArea.allTaos.size(); ++j) {
                     if (lmu.mask.extract(projectArea.allTaos.x(j), projectArea.allTaos.y(j), lapis::ExtractMethod::near).has_value())
                         taos.taoVector.addFeature(projectArea.allTaos.taoVector.getFeature(j));

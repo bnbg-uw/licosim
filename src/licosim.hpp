@@ -48,7 +48,7 @@ namespace licosim {
         //void writeOutputs(std::string path);
 
     private:
-        void treatmentThread(size_t& sofar, std::mutex& mut, double dbhMin, double dbhMax, lapis::Raster<lapis::cell_t>& unitZonal, rxtools::TaoListMP& treatedTaos, const int thisThread);
+        void treatmentThread(size_t& sofar, std::mutex& mut, double dbhMin, double dbhMax, lapis::Raster<lapis::cell_t>& unitZonal, rxtools::TaoListPt& treatedTaos, const int thisThread);
         void assignTargetThread(size_t& sofar, size_t& nLmu, rxtools::Lmu& lmu, const int thisThread);
         //void createRxUnitsPolyThread(int& sofar, std::mutex& mut, const int thisThread, spatial::SpVectorDataset<spatial::SpMultiPolygon>& unitPoly, dbhFunction& dbhFunc, std::string& column);
         //void createRxUnitsRasterThread(int& sofar, std::mutex& mut, const int thisThread, spatial::Raster<int>& unitR, dbhFunction& dbhFunc);
