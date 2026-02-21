@@ -18,11 +18,11 @@ namespace licosim {
         treater = rxtools::Treatment(dre);
         std::cout << "\tProject Area done!\n";
 
-        projectArea.lmuIds.writeRaster("G:/before.tif");
+        projectArea.lmuIds.writeRaster("G:/before.tif", "GTiff", std::numeric_limits<lapis::cell_t>::lowest(), GDT_UInt32);
         if (ps->subdivideLmus) {
             projectArea.subdivideLmus(ps->climateClassPath, ps->nThread);
         }
-        projectArea.lmuIds.writeRaster("G:/after.tif");
+        projectArea.lmuIds.writeRaster("G:/after.tif", "GTiff", std::numeric_limits<lapis::cell_t>::lowest(), GDT_UInt32);
 
         output = rxtools::Output(projectArea.lmuRaster);
         output.lmus = projectArea.lmuRaster;
