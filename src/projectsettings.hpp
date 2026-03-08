@@ -148,16 +148,16 @@ namespace licosim {
                     c = std::tolower(static_cast<unsigned char>(c));
                 }
                 if(tStr == "none") {
-                    transform = rxtools::allometry::UnivariateLinearModel::Transform::None;
+                    transform = rxtools::allometry::transforms::none;
                 }
                 else if (tStr == "square") {
-                    transform = rxtools::allometry::UnivariateLinearModel::Transform::Square;
+                    transform = rxtools::allometry::transforms::square;
                 }
                 else if (tStr == "cube") {
-                    transform = rxtools::allometry::UnivariateLinearModel::Transform::Cube;
+                    transform = rxtools::allometry::transforms::cube;
                 }
                 else if (tStr == "power") {
-                    transform = rxtools::allometry::UnivariateLinearModel::Transform::Power;
+                    transform = rxtools::allometry::transforms::power;
                 }
                 else {
                     std::cout << "\"" + tStr + "\" is not a valid tranform. Choose one of (none, square, cube, power)";

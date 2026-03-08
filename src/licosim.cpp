@@ -32,7 +32,7 @@ namespace licosim {
         std::cout << "\tCreating allometry from ";
         if(ps->slope > 0) {
             std::cout << "user provided coefficients...";
-            dbhModel = rxtools::allometry::UnivariateLinearModel(ps->slope, ps->intercept, ps->transform, ps->rsq, ps->inUnit, ps->outUnit);
+            dbhModel = rxtools::allometry::DbhModel(ps->slope, ps->intercept, ps->transform, ps->rsq, ps->inUnit, ps->outUnit);
             std::cout << "  Done!\n";
         }
         else {
@@ -47,11 +47,11 @@ namespace licosim {
             reader.makePlotTreeMap(std::vector<std::string>{ "DIA" });
             auto allTrees = reader.collapsePlotTreeMap();
             allTrees.writeCsv(ProjectSettings::get().outputPath + "/fia_tree_data.csv");
-            dbhModel = rxtools::allometry::UnivariateLinearModel(allTrees, "DIA", rxtools::linearUnitPresets::inch);
+            dbhModel = rxtools::allometry::DbhModel(allTrees.height, allTrees.get("DIA"), lapis::linearUnitPresets::internationalFoot, lapis::linearUnitPresets::internationalInch);
             std::cout << " Done!\n";
             std::cout << "intercept: " << dbhModel.parameters.intercept << "\n";
             std::cout << "slope: " << dbhModel.parameters.slope << "\n";
-            std::cout << "transform: " << int(dbhModel.parameters.transform) << "\n";
+            std::cout << "transform: " << dbhModel.parameters.transform.name << "\n";
             std::cout << "rsq: " << dbhModel.parameters.rsq << "\n";
             std::cout << "inUnit: " << dbhModel.inputUnit.name() << "\n";
             std::cout << "outUnit: " << dbhModel.outputUnit.name() << "\n";
@@ -95,7 +95,7 @@ namespace licosim {
             projectArea.lidarDataset->areaGetter(),
             //TODO: at some point it would be good to not implicitly assume height units are not in meters.
             [dm = dbhModel, hg = projectArea.lidarDataset->heightGetter()](const lapis::ConstFeature<lapis::Point>& ft)->double {
-                return dm.predict(hg(ft), lapis::linearUnitPresets::meter, rxtools::linearUnitPresets::centimeter);
+                return dm.predict(hg(ft), lapis::linearUnitPresets::meter, lapis::linearUnitPresets::centimeter);
             }
         );
 
