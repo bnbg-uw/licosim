@@ -6,6 +6,17 @@
 #include "licosim.hpp"
 #include "ProjWrappers.hpp"
 
+static std::string executableFilePath() {
+    int length = wai_getExecutablePath(nullptr, 0, nullptr);
+    std::vector<char> path;
+    path.resize((size_t)length + 1);
+    wai_getExecutablePath(path.data(), length, nullptr);
+    path[length] = '\0';
+    std::string asString{ path.begin(),path.end() };
+    std::filesystem::path asPath{ asString };
+    return asPath.parent_path().string();
+}
+
 int main(int argc, char* argv[])
 {
     namespace po = boost::program_options;
@@ -79,7 +90,7 @@ int main(int argc, char* argv[])
 
     std::cout << "Beginning processing:\n";
     std::cout << "\tReading projectsettings...";
-    licosim::ProjectSettings::get().loadFromOptionsAndParentPath(lapis::executableFilePath(), vm);
+    licosim::ProjectSettings::get().loadFromOptionsAndParentPath(executableFilePath(), vm);
     licosim::ProjectSettings::get().commandLine = commandLine;
     std::cout << " Done!\n";
 

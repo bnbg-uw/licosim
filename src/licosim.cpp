@@ -18,11 +18,9 @@ namespace licosim {
         treater = rxtools::Treatment(dre);
         std::cout << "\tProject Area done!\n";
 
-        projectArea.lmuIds.writeRaster("G:/before.tif", "GTiff", std::numeric_limits<lapis::cell_t>::lowest(), GDT_UInt32);
         if (ps->subdivideLmus) {
             projectArea.subdivideLmus(ps->climateClassPath, ps->nThread);
         }
-        projectArea.lmuIds.writeRaster("G:/after.tif", "GTiff", std::numeric_limits<lapis::cell_t>::lowest(), GDT_UInt32);
 
         output = rxtools::Output(projectArea.lmuRaster);
         output.lmus = projectArea.lmuRaster;
@@ -87,7 +85,7 @@ namespace licosim {
         }
         std::cout << " Done!\n";
 
-        rxtools::TaoGettersPt getters = rxtools::TaoGettersPt(
+        rxtools::TaoGetters<lapis::VectorDataset<lapis::Point>> getters = rxtools::TaoGetters<lapis::VectorDataset<lapis::Point>>(
             lapis::lico::alwaysAdd<lapis::VectorDataset<lapis::Point>>,
             projectArea.lidarDataset->coordGetter(),
             projectArea.lidarDataset->heightGetter(),
@@ -101,7 +99,7 @@ namespace licosim {
 
         auto before = std::chrono::high_resolution_clock::now();
         std::cout << "Reading Taos...";
-        projectArea.allTaos = rxtools::TaoListPt(std::move(projectArea.lidarDataset->allHighPoints()), getters);
+        projectArea.allTaos = rxtools::TaoList(std::move(projectArea.lidarDataset->allHighPoints()), getters);
         auto after = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> elapsed = after - before;
         std::cout << " Done! Time taken: " << elapsed.count() << " seconds\n";
@@ -280,7 +278,7 @@ namespace licosim {
         lapis::Raster<lapis::cell_t> unitZonal{ (lapis::Alignment)projectArea.lmuIds };
         paired = lapis::Raster<lapis::cell_t>{ (lapis::Alignment)projectArea.lmuIds };
 
-        rxtools::TaoListPt treatedTaos{ projectArea.allTaos, true };
+        rxtools::TaoList treatedTaos{ projectArea.allTaos.crs()};
         std::mutex mut{};
         size_t sofar = 0;
         std::vector<std::thread> threads{};
@@ -294,7 +292,7 @@ namespace licosim {
         std::cout << "Treatment done\n";
     }
 
-    void Licosim::treatmentThread(size_t& sofar, std::mutex& mut, double dbhMin, double dbhMax, lapis::Raster<lapis::cell_t>& unitZonal, rxtools::TaoListPt& treatedTaos, const int thisThread) {
+    void Licosim::treatmentThread(size_t& sofar, std::mutex& mut, double dbhMin, double dbhMax, lapis::Raster<lapis::cell_t>& unitZonal, rxtools::TaoList& treatedTaos, const int thisThread) {
         size_t nLmu = projectArea.regionType.size();
         std::filesystem::path p(ProjectSettings::get().outputPath);
         p /= "lmus";
@@ -324,10 +322,14 @@ namespace licosim {
                     projectArea.aet.ymax() - projectArea.aet.yres() / 2);
                 if (!lmu.mask.overlaps(e)) continue;
 
-                rxtools::TaoListPt taos{ projectArea.allTaos, true };
+                rxtools::TaoList taos{ projectArea.allTaos.crs() };
                 for (size_t j = 0; j < projectArea.allTaos.size(); ++j) {
                     if (lmu.mask.extract(projectArea.allTaos.x(j), projectArea.allTaos.y(j), lapis::ExtractMethod::near).has_value())
-                        taos.taoVector.addFeature(projectArea.allTaos.taoVector.getFeature(j));
+                        taos.addTao(projectArea.allTaos.xy(j),
+                            projectArea.allTaos.height(j),
+                            projectArea.allTaos.radius(j),
+                            projectArea.allTaos.area(j),
+                            projectArea.allTaos.dbh(j));
                 }
                 std::cout << "LMU taos size: " << taos.size() << "\n";
 
@@ -417,8 +419,13 @@ namespace licosim {
                         mut.unlock();
                         continue;
                     }*/
-                    for (size_t k = 0; k < lmu.units[j].treatedTaos.size(); ++k)
-                        treatedTaos.taoVector.addFeature(lmu.units[j].treatedTaos.taoVector.getFeature(k));
+                    for (size_t k = 0; k < lmu.units[j].treatedTaos.size(); ++k) {
+                        treatedTaos.addTao(lmu.units[j].treatedTaos.xy(k),
+                            lmu.units[j].treatedTaos.height(k),
+                            lmu.units[j].treatedTaos.radius(k),
+                            lmu.units[j].treatedTaos.area(k),
+                            lmu.units[j].treatedTaos.dbh(k));
+                    }
 
                     unitZonal.overlayInside(lmu.units[j].unitMask);
 
