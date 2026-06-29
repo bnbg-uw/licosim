@@ -85,25 +85,15 @@ namespace licosim {
         }
         std::cout << " Done!\n";
 
-        rxtools::TaoGetters<lapis::VectorDataset<lapis::Point>> getters = rxtools::TaoGetters<lapis::VectorDataset<lapis::Point>>(
-            lapis::lico::alwaysAdd<lapis::VectorDataset<lapis::Point>>,
-            projectArea.lidarDataset->coordGetter(),
-            projectArea.lidarDataset->heightGetter(),
-            projectArea.lidarDataset->radiusGetter(),
-            projectArea.lidarDataset->areaGetter(),
-            //TODO: at some point it would be good to not implicitly assume height units are not in meters.
-            [dm = dbhModel, hg = projectArea.lidarDataset->heightGetter()](const lapis::ConstFeature<lapis::Point>& ft)->double {
-                return dm.predict(hg(ft), lapis::linearUnitPresets::meter, lapis::linearUnitPresets::centimeter);
-            }
-        );
-
+        std::cout << "Setting taos...";
         auto before = std::chrono::high_resolution_clock::now();
-        std::cout << "Reading Taos...";
-        projectArea.allTaos = rxtools::TaoList(std::move(projectArea.lidarDataset->allHighPoints()), getters);
+        projectArea.setTaos([dm = dbhModel, hg = projectArea.lidarDataset->heightGetter()](const lapis::ConstFeature<lapis::Point>& ft)->double {
+            return dm.predict(hg(ft), lapis::linearUnitPresets::meter, lapis::linearUnitPresets::centimeter);
+            }, licosim::ProjectSettings::get().nThread);
+        std::cout << " Done!\n";
         auto after = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> elapsed = after - before;
         std::cout << " Done! Time taken: " << elapsed.count() << " seconds\n";
-        std::cout << "Alltaos size: " << projectArea.allTaos.size() << "\n";
 
         std::cout << "\t Performing PCA on climate data...";
         std::unique_ptr<csv::CSVReader> csv;
@@ -278,7 +268,7 @@ namespace licosim {
         lapis::Raster<lapis::cell_t> unitZonal{ (lapis::Alignment)projectArea.lmuIds };
         paired = lapis::Raster<lapis::cell_t>{ (lapis::Alignment)projectArea.lmuIds };
 
-        rxtools::TaoList treatedTaos{ projectArea.allTaos.crs()};
+        rxtools::TaoList treatedTaos{ projectArea.getTaos().at(0).second.crs()};
         std::mutex mut{};
         size_t sofar = 0;
         std::vector<std::thread> threads{};
@@ -322,14 +312,19 @@ namespace licosim {
                     projectArea.aet.ymax() - projectArea.aet.yres() / 2);
                 if (!lmu.mask.overlaps(e)) continue;
 
-                rxtools::TaoList taos{ projectArea.allTaos.crs() };
-                for (size_t j = 0; j < projectArea.allTaos.size(); ++j) {
-                    if (lmu.mask.extract(projectArea.allTaos.x(j), projectArea.allTaos.y(j), lapis::ExtractMethod::near).has_value())
-                        taos.addTao(projectArea.allTaos.xy(j),
-                            projectArea.allTaos.height(j),
-                            projectArea.allTaos.radius(j),
-                            projectArea.allTaos.area(j),
-                            projectArea.allTaos.dbh(j));
+                rxtools::TaoList taos{ projectArea.getTaos().at(0).second.crs()};
+                for (size_t j = 0; j < projectArea.getTaos().size(); ++j) {
+                    auto& thisTile = projectArea.getTaos().at(j);
+                    if (thisTile.first.overlaps(lmu.mask)) {
+                        for (size_t k = 0; k < thisTile.second.size(); ++k) {
+                            if (lmu.mask.extract(thisTile.second.x(k), thisTile.second.y(k), lapis::ExtractMethod::near).has_value())
+                                taos.addTao(thisTile.second.xy(k),
+                                    thisTile.second.height(k),
+                                    thisTile.second.radius(k),
+                                    thisTile.second.area(k),
+                                    thisTile.second.dbh(k));
+                        }
+                    }
                 }
                 std::cout << "LMU taos size: " << taos.size() << "\n";
 
