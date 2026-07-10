@@ -21,6 +21,8 @@ int main(int argc, char* argv[])
 {
     namespace po = boost::program_options;
 
+    lapis::lapisGisInit();
+
     po::options_description desc("Licosim: Given lidar data and a lot of area parameters, calculate proposed LMU based treatment alternatives based on given reference conditions.");
     desc.add_options()
         ("projectpoly,p", po::value<std::string>()->required(), "REQUIRED: Path to project area polygon (esri shapefile).")
@@ -31,6 +33,7 @@ int main(int argc, char* argv[])
         ("lmu", po::value<std::string>(), "Path to lmu raster (\".tif\").  See documentation for expected format.")
         ("subdivideLmus", "If present, subdivide lmus first by climate class and the by kmeans to a certain size")
         ("reference,r", po::value<std::string>(), "Path to reference database, if not using one of the internal databases.")
+        ("fixedradius,f",po::value<lapis::coord_t>()->default_value(3), "Fixed radius for LICO, in meters. Defaults to 3.")
         ("allom_slope", po::value<double>(), "Slope for a univariate linear model. Derived from FIA data if any parameter missing.")
         ("allom_intercept", po::value<double>(), "Intercept for a univariate linear model. Derived from FIA data if any parameter missing.")
         ("allom_rsq", po::value<double>(), "R-squared for a univariate linear model. Derived from FIA data if any parameter missing.")
@@ -54,6 +57,7 @@ int main(int argc, char* argv[])
         ("writeunits", "Write out lmus and rxunits to the output folder (treelists). WARNING can take up A LOT of space.")
         ("fastfuels", "write csvs in fastfuels format too if writeunits is set.")
         ("overridetargets", "Use Ba and DBH cutoffs defined in unit file to override internal targets")
+        ("noclimateclasses", "Do not subdivide LMUs by climate class")
         ("help,h", "Display this help message and exit.");
 
     std::string commandLine = "";

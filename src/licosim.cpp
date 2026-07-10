@@ -19,7 +19,7 @@ namespace licosim {
         std::cout << "\tProject Area done!\n";
 
         if (ps->subdivideLmus) {
-            projectArea.subdivideLmus(ps->climateClassPath, ps->nThread);
+            projectArea.subdivideLmus(ps->climateClassPath, ps->nThread, ps->noClimateClasses);
         }
 
         output = rxtools::Output(projectArea.lmuRaster);
@@ -87,9 +87,9 @@ namespace licosim {
 
         std::cout << "Setting taos...";
         auto before = std::chrono::high_resolution_clock::now();
-        projectArea.setTaos([dm = dbhModel, hg = projectArea.lidarDataset->heightGetter()](const lapis::ConstFeature<lapis::Point>& ft)->double {
+        projectArea.setTaos([dm = dbhModel, hg = projectArea.lidarDataset->heightGetterPolygon()](const lapis::ConstFeature<lapis::MultiPolygon>& ft)->double {
             return dm.predict(hg(ft), lapis::linearUnitPresets::meter, lapis::linearUnitPresets::centimeter);
-            }, licosim::ProjectSettings::get().nThread);
+            }, licosim::ProjectSettings::get().nThread, licosim::ProjectSettings::get().fixedRadiusMeters);
         std::cout << " Done!\n";
         auto after = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> elapsed = after - before;
@@ -235,8 +235,10 @@ namespace licosim {
             return valleyLmu.detailedQuery(pcClimate, k, false, maxDist);
         else if (type == rxtools::LmuType::swFacing)
             return swFacingLmu.detailedQuery(pcClimate, k, false, maxDist);
-        else
+        else if (type == rxtools::LmuType::neFacing)
             return neFacingLmu.detailedQuery(pcClimate, k, false, maxDist);
+        else 
+            return allLmu.detailedQuery(pcClimate, k, false, maxDist);
     }
 
     void Licosim::assignTargetThread(size_t& sofar, size_t& nLmu, rxtools::Lmu& lmu, const int thisThread) {

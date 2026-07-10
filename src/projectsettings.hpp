@@ -46,6 +46,8 @@ namespace licosim {
         lapis::LinearUnit inUnit;
         lapis::LinearUnit outUnit;
 
+        lapis::coord_t fixedRadiusMeters;
+
         bool useFireRef = true;
         bool useHydroRef = false;
         bool useHabitatRef = false;
@@ -53,6 +55,7 @@ namespace licosim {
 
         bool subdivideLmus = false;
         bool overrideTargets = false;
+        bool noClimateClasses = false;
 
         //Treatment behavior indices:
         //double percentLandscape = std::nan("");
@@ -104,7 +107,10 @@ namespace licosim {
                 outputPath = fs.string();
             }
             else {
-                throw std::runtime_error("Output path does not exist.");
+                std::filesystem::create_directories(outputPath);
+                if (!std::filesystem::exists(outputPath)) {
+                    throw std::runtime_error("Output path does not exist.");
+                }
             }
 
             if (vm.count("writeunits")) writeUnits = true;
@@ -228,6 +234,9 @@ namespace licosim {
 
             overrideTargets = vm.count("overridetargets") ? true : false;
             subdivideLmus = vm.count("subdivideLmus") ? true : false;
+            noClimateClasses = vm.count("noclimateclasses") ? true : false;
+
+            fixedRadiusMeters = vm["fixedradius"].as<lapis::coord_t>();
 
         }
 
