@@ -14,7 +14,7 @@ namespace licosim {
     public:
         rxtools::ProjectArea projectArea;
         rxtools::Treatment treater;
-        rxtools::allometry::DbhModel dbhModel;
+        std::shared_ptr<rxtools::allometry::AllometryRaster> dbhAllomRaster;
         rxtools::allometry::FastFuels ffa;
         rxtools::Output output;
         std::default_random_engine dre;

@@ -27,44 +27,18 @@ namespace licosim {
         output.lmuIds = projectArea.lmuIds;
         output.commandLine = ps->commandLine;
 
-        std::cout << "\tCreating allometry from ";
-        if(ps->slope > 0) {
-            std::cout << "user provided coefficients...";
-            dbhModel = rxtools::allometry::DbhModel(ps->slope, ps->intercept, ps->transform, ps->rsq, ps->inUnit, ps->outUnit);
-            std::cout << "  Done!\n";
-        }
-        else {
-            std::cout << "FIA plots...";
-            auto reader = rxtools::allometry::FIAReader(ps->fiaPath);
-            auto dist = projectArea.lidarDataset->units().value().convertOneToThis(10000, lapis::linearUnitPresets::meter);
-            lapis::Extent e(projectArea.projectPoly.extent().xmin() - dist, projectArea.projectPoly.extent().xmax() + dist,
-                projectArea.projectPoly.extent().ymin() - dist, projectArea.projectPoly.extent().ymax() + dist,
-                projectArea.projectPoly.crs());
-            if (!reader.limitByExtent(e))
-                throw std::runtime_error("no fia in this place");
-            reader.makePlotTreeMap(std::vector<std::string>{ "DIA" });
-            auto allTrees = reader.collapsePlotTreeMap();
-            allTrees.writeCsv(ProjectSettings::get().outputPath + "/fia_tree_data.csv");
-            dbhModel = rxtools::allometry::DbhModel(allTrees.height, allTrees.get("DIA"), lapis::linearUnitPresets::internationalFoot, lapis::linearUnitPresets::internationalInch);
-            std::cout << " Done!\n";
-            std::cout << "intercept: " << dbhModel.parameters.intercept << "\n";
-            std::cout << "slope: " << dbhModel.parameters.slope << "\n";
-            std::cout << "transform: " << dbhModel.parameters.transform.name << "\n";
-            std::cout << "rsq: " << dbhModel.parameters.rsq << "\n";
-            std::cout << "inUnit: " << dbhModel.inputUnit.name() << "\n";
-            std::cout << "outUnit: " << dbhModel.outputUnit.name() << "\n";
-
-            if (ps->writeUnits && ps->fastFuels) {
-                ffa = rxtools::allometry::FastFuels(allTrees);
-            }
-        }
-
         std::cout << "\tReading and reprojecting unit layer...";
         if (std::filesystem::path(ps->unitPolygonPath).extension() != ".shp")
             shp = false;
 
         if (shp) {
-            unitPoly = lapis::VectorDataset<lapis::MultiPolygon>(ps->unitPolygonPath);
+            try {
+                unitPoly = lapis::VectorDataset<lapis::MultiPolygon>(ps->unitPolygonPath);
+            }
+            catch (std::exception& e) {
+                std::cerr << "Error reading unit polygon shapefile: " << e.what() << "\n";
+                throw;
+            }
             if (!unitPoly.crs().isConsistent(projectArea.projectPoly.crs()))
                 unitPoly.projectInPlace(projectArea.projectPoly.crs());
             if (!unitPoly.extent().overlaps(projectArea.projectPoly.extent())) {
@@ -74,7 +48,13 @@ namespace licosim {
 
         }
         else {
-            unitRaster = lapis::Raster<int>(ps->unitPolygonPath);
+            try {
+                unitRaster = lapis::Raster<int>(ps->unitPolygonPath);
+            }
+            catch (std::exception& e) {
+                std::cerr << "Error reading unit polygon raster: " << e.what() << "\n";
+                throw;
+            }
             lapis::Alignment projectAlign = lapis::Alignment((lapis::Extent)ps->unitPolygonPath, unitRaster.nrow(), unitRaster.ncol());
             unitRaster = lapis::resampleRaster(unitRaster, projectAlign, lapis::ExtractMethod::near);
             unitRaster = lapis::trimRaster(unitRaster);
@@ -85,23 +65,101 @@ namespace licosim {
         }
         std::cout << " Done!\n";
 
-        std::cout << "Setting taos...";
+        std::cout << "\tCreating allometry from ";
         auto before = std::chrono::high_resolution_clock::now();
-        projectArea.setTaos([dm = dbhModel, hg = projectArea.lidarDataset->heightGetterPolygon()](const lapis::ConstFeature<lapis::MultiPolygon>& ft)->double {
-            return dm.predict(hg(ft), lapis::linearUnitPresets::meter, lapis::linearUnitPresets::centimeter);
-            }, licosim::ProjectSettings::get().nThread, licosim::ProjectSettings::get().fixedRadiusMeters);
+
+        if (ps->slope > 0) {
+            std::cout << "user provided coefficients...";
+            //dbhModel = rxtools::allometry::DbhModel(ps->slope, ps->intercept, ps->transform, ps->rsq, ps->inUnit, ps->outUnit);
+            std::cout << "  Deprecated function for now as as allometry rasters have been added\n";
+        }
+        else {
+            std::cout << "FIA plots...";
+            std::unique_ptr<rxtools::allometry::FIAReader> reader;
+            try {
+                reader = std::make_unique<rxtools::allometry::FIAReader>(ps->fiaPath);
+            }
+            catch (std::exception& e) {
+                std::cerr << "Error reading FIA data: " << e.what() << "\n";
+                throw;
+            }
+            auto dist = projectArea.lidarDataset->units().value().convertOneToThis(10000, lapis::linearUnitPresets::meter);
+            lapis::Extent e(projectArea.projectPoly.extent().xmin() - dist, projectArea.projectPoly.extent().xmax() + dist,
+                projectArea.projectPoly.extent().ymin() - dist, projectArea.projectPoly.extent().ymax() + dist,
+                projectArea.projectPoly.crs());
+            if (!reader->limitByExtent(e))
+                throw std::runtime_error("no fia in this place");
+            reader->makePlotTreeMap(std::vector<std::string>{ "DIA" });
+            auto allTrees = reader->collapsePlotTreeMap();
+
+            try {
+                allTrees.writeCsv(ProjectSettings::get().outputPath + "/fia_tree_data.csv");
+            }
+            catch (std::exception& e) {
+                std::cerr << "Error writing FIA tree data to CSV: " << e.what() << "\n";
+                throw;
+            }
+            static_assert(
+                std::is_move_assignable_v<rxtools::allometry::AllometryRaster>,
+                "AllometryRaster is not move assignable"
+                );
+            static_assert(
+                std::is_move_constructible_v<rxtools::allometry::AllometryRaster>,
+                "AllometryRaster is not move constructible"
+                );
+            dbhAllomRaster = std::make_shared<rxtools::allometry::AllometryRaster>(rxtools::allometry::calculateAllometryOverAOI<rxtools::allometry::DbhModel>(
+                projectArea.lmuRaster,
+                *reader,
+                "DIA",
+                lapis::linearUnitPresets::internationalInch,
+                std::nullopt,
+                std::nullopt,
+                ps->get().nThread
+            ));
+
+            if (ps->writeUnits && ps->fastFuels) {
+                ffa = rxtools::allometry::FastFuels(allTrees);
+            }
+        }
         std::cout << " Done!\n";
         auto after = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> elapsed = after - before;
         std::cout << " Done! Time taken: " << elapsed.count() << " seconds\n";
 
+        std::cout << "Setting taos...";
+        before = std::chrono::high_resolution_clock::now();
+        auto dbhG = [
+            dr = dbhAllomRaster,
+            hg = projectArea.lidarDataset->heightGetterPolygon(),
+            cg = projectArea.lidarDataset->coordGetterPolygon()
+        ](const lapis::ConstFeature<lapis::MultiPolygon>& ft)->double {
+            auto xy = cg(ft);
+            auto c = dr->cellFromXY(xy.x, xy.y);
+            if ((*dr)[c].has_value()) {
+                return (*dr)[c].value()->predict(hg(ft), lapis::linearUnitPresets::meter, lapis::linearUnitPresets::centimeter);
+            }
+            std::cerr << "No valid DBH model found for the given feature\n";
+            throw std::runtime_error("No valid DBH model found for the given feature");
+        };
+        projectArea.setTaos(dbhG, licosim::ProjectSettings::get().nThread, licosim::ProjectSettings::get().fixedRadiusMeters);
+        std::cout << " Done!\n";
+        after = std::chrono::high_resolution_clock::now();
+        elapsed = after - before;
+        std::cout << " Done! Time taken: " << elapsed.count() << " seconds\n";
+
         std::cout << "\t Performing PCA on climate data...";
         std::unique_ptr<csv::CSVReader> csv;
-        if (ps->referenceDatasetPath != "") {
-            csv = std::make_unique<csv::CSVReader>(ps->referenceDatasetPath);
+        try {
+            if (ps->referenceDatasetPath != "") {
+                csv = std::make_unique<csv::CSVReader>(ps->referenceDatasetPath);
+            }
+            else {
+                csv = std::make_unique<csv::CSVReader>(ps->defaultRefPath);
+            }
         }
-        else {
-            csv = std::make_unique<csv::CSVReader>(ps->defaultRefPath);
+        catch (std::exception& e) {
+            std::cerr << "Error reading reference dataset CSV: " << e.what() << "\n";
+            throw;
         }
         for (auto& row : *csv) {
             names.push_back(row["name"].get<>());

@@ -58,6 +58,7 @@ int main(int argc, char* argv[])
         ("fastfuels", "write csvs in fastfuels format too if writeunits is set.")
         ("overridetargets", "Use Ba and DBH cutoffs defined in unit file to override internal targets")
         ("noclimateclasses", "Do not subdivide LMUs by climate class")
+        ("stubtaos", po::value<std::string>(), "If you have your own taofile, these will be loaded instead of the lidardataset (which is still used for lmus).")
         ("help,h", "Display this help message and exit.");
 
     std::string commandLine = "";

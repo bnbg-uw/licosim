@@ -18,6 +18,8 @@ namespace licosim {
         bool writeUnits = false;
         bool fastFuels = false;
         std::string lidarDatasetPath;
+        std::string taoStubPath;
+
         std::string projectPolygonPath;
         std::string unitPolygonPath;
         std::string lmuRasterPath;
@@ -96,6 +98,11 @@ namespace licosim {
             defaultRefPath = fireRefPath;
 
             lidarDatasetPath = vm["lidar"].as<std::string>();
+            if (vm.count("stubtaos"))
+                taoStubPath = vm["stubtaos"].as<std::string>();
+            else
+                taoStubPath = "";
+
             if (vm.count("output"))
                 outputPath = vm["output"].as<std::string>();
             else
