@@ -99,14 +99,7 @@ namespace licosim {
                 std::cerr << "Error writing FIA tree data to CSV: " << e.what() << "\n";
                 throw;
             }
-            static_assert(
-                std::is_move_assignable_v<rxtools::allometry::AllometryRaster>,
-                "AllometryRaster is not move assignable"
-                );
-            static_assert(
-                std::is_move_constructible_v<rxtools::allometry::AllometryRaster>,
-                "AllometryRaster is not move constructible"
-                );
+            
             dbhAllomRaster = std::make_shared<rxtools::allometry::AllometryRaster>(rxtools::allometry::calculateAllometryOverAOI<rxtools::allometry::DbhModel>(
                 projectArea.lmuRaster,
                 *reader,
@@ -126,6 +119,23 @@ namespace licosim {
         std::chrono::duration<double> elapsed = after - before;
         std::cout << " Done! Time taken: " << elapsed.count() << " seconds\n";
 
+        lapis::Raster<int> tmp((lapis::Alignment)*dbhAllomRaster);
+        for (lapis::cell_t c = 0; c < tmp.ncell(); ++c) {
+            if ((*dbhAllomRaster)[c].has_value()) {
+                tmp[c].has_value() = true;
+                tmp[c].value() = 0;
+            }
+        }
+        lapis::Raster<int> lmu((lapis::Alignment)projectArea.lmuRaster);
+        for (lapis::cell_t c = 0; c < lmu.ncell(); ++c) {
+            if (projectArea.lmuRaster[c].has_value()) {
+                lmu[c].has_value() = true;
+                lmu[c].value() = 0;
+            }
+
+        }
+        lmu.writeRaster("F:/lmu_raster.tif");
+
         std::cout << "Setting taos...";
         before = std::chrono::high_resolution_clock::now();
         auto dbhG = [
@@ -134,12 +144,19 @@ namespace licosim {
             cg = projectArea.lidarDataset->coordGetterPolygon()
         ](const lapis::ConstFeature<lapis::MultiPolygon>& ft)->double {
             auto xy = cg(ft);
-            auto c = dr->cellFromXY(xy.x, xy.y);
+            lapis::cell_t c;
+            try { //since we load whole tiles, some taos will be outside of allometry
+                c = dr->cellFromXY(xy.x, xy.y);
+            }
+            catch (lapis::OutsideExtentException e) {
+                return(0);
+            }
             if ((*dr)[c].has_value()) {
                 return (*dr)[c].value()->predict(hg(ft), lapis::linearUnitPresets::meter, lapis::linearUnitPresets::centimeter);
             }
-            std::cerr << "No valid DBH model found for the given feature\n";
-            throw std::runtime_error("No valid DBH model found for the given feature");
+            else {
+                return(0);
+            }
         };
         projectArea.setTaos(dbhG, licosim::ProjectSettings::get().nThread, licosim::ProjectSettings::get().fixedRadiusMeters);
         std::cout << " Done!\n";
